@@ -401,6 +401,7 @@ def main() -> None:
     if build_arch == "x86_64":
         build_arch = "amd64"
         logger.debug("The build will be a cross-compilation amd64 -> arm64")
+        raise Exception("AMD64 host is not supported anymore due to issues with cross-building. Please run this script on an ARM64 host.")
     elif build_arch == "aarch64":
         build_arch = "arm64"
         logger.debug("The build will be a native build arm64 -> arm64")
