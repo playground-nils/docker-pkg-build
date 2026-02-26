@@ -11,6 +11,19 @@ RUN apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
+# Necessary fix for resolute fixing this error:
+# - No entry for root in /etc/subuid
+# - invalid idmap
+RUN apt-get update && \
+    apt-get install -y uidmap mmdebstrap && \
+    # Ensure root has a 65k subuid/subgid block (idempotent append)
+    if ! grep -q '^root:100000:65536$' /etc/subuid; then \
+        echo 'root:100000:65536' | tee -a /etc/subuid; \
+    fi && \
+    if ! grep -q '^root:100000:65536$' /etc/subgid; then \
+        echo 'root:100000:65536' | tee -a /etc/subgid; \
+    fi
+
 COPY extra-packages.txt /tmp/extra-packages.txt
 
 RUN EXTRA_PACKAGES=$(tr -s '[:space:]' ',' < /tmp/extra-packages.txt) && \
