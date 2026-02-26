@@ -10,6 +10,11 @@ Standalone utility to:
 - Extract each referenced .deb into data/<pkg>/<arch>/ under the directory containing the .changes file
 - Pack the data/ directory as <changes_basename>.tar.gz
 - Place the tarball under <output-tar>/prebuilt_<distro>/ when --output-tar and --distro are provided; otherwise follow the fallback rules described in --output-tar help.
+
+By default the script re-invokes itself inside a Docker container (as root) so
+that it can always write to the output directory regardless of ownership (a
+common situation after a Docker-based debian build where sbuild runs as root).
+Pass --_in-docker internally (set automatically) to skip the re-invocation.
 """
 
 import os
@@ -20,8 +25,12 @@ import re
 import tarfile
 import subprocess
 import traceback
+import platform
 
 from color_logger import logger
+
+# Same image naming convention used by docker_deb_build.py
+DOCKER_IMAGE_NAME_FMT = "ghcr.io/qualcomm-linux/pkg-builder:{build_arch}-{suite_name}"
 
 
 def parse_arguments():
@@ -52,7 +61,77 @@ def parse_arguments():
         default="",
         help="Target distro name (e.g., noble, questing). If provided, tar will be placed under <output-tar>/prebuilt_<distro>/"
     )
+    parser.add_argument(
+        "--docker-image",
+        required=False,
+        default="",
+        help="Docker image to use when running inside a container. "
+             "Defaults to ghcr.io/qualcomm-linux/pkg-builder:<host_arch>-<distro>."
+    )
+    # Internal flag: set automatically when the script is already running inside
+    # a container to prevent infinite re-invocation.
+    parser.add_argument("--_in-docker", dest="in_docker", action="store_true",
+                        default=False, help=argparse.SUPPRESS)
     return parser.parse_args()
+
+
+def rerun_in_docker(args, changes_path: str) -> int:
+    """
+    Re-invoke this script inside a Docker container so it runs as root.
+    This ensures write access to the output directory regardless of ownership.
+
+    Mounts:
+      <script_dir>      -> /scripts          (read-only: this script + color_logger.py)
+      <work_dir>        -> <work_dir>        (read-write: .changes and .deb files)
+      <base_output_dir> -> <base_output_dir> (read-write: tarball destination)
+
+    work_dir and base_output_dir are mounted at their original absolute paths
+    so all path arguments remain valid unchanged inside the container.
+    If base_output_dir does not yet exist, Docker (running as root) creates it.
+
+    Returns the container's exit code.
+    """
+    if args.docker_image:
+        image_name = args.docker_image
+    else:
+        machine = platform.machine()
+        build_arch = "arm64" if machine == "aarch64" else ("amd64" if machine == "x86_64" else machine)
+        suite = args.distro if args.distro else "noble"
+        image_name = DOCKER_IMAGE_NAME_FMT.format(build_arch=build_arch, suite_name=suite)
+
+    script_dir      = os.path.dirname(os.path.abspath(__file__))
+    work_dir        = os.path.dirname(changes_path)
+    base_output_dir = os.path.abspath(args.output_tar) if args.output_tar else work_dir
+
+    # Build a minimal set of data mounts (skip a path already covered by a
+    # parent mount to avoid overlapping -v flags).
+    candidates = sorted({work_dir, base_output_dir})
+    data_mounts = []
+    for d in candidates:
+        if not any(d == r or d.startswith(r + os.sep) for r in data_mounts):
+            data_mounts.append(d)
+
+    docker_cmd = ['docker', 'run', '--rm',
+                  '-v', f'{script_dir}:/scripts:ro,Z']
+    for d in data_mounts:
+        docker_cmd += ['-v', f'{d}:{d}:Z']
+
+    docker_cmd += [image_name, 'python3', '/scripts/create_data_tar.py',
+                   '--path-to-changes', changes_path,
+                   '--arch', args.arch]
+    if args.output_tar:
+        docker_cmd += ['--output-tar', base_output_dir]
+    if args.distro:
+        docker_cmd += ['--distro', args.distro]
+    if args.docker_image:
+        docker_cmd += ['--docker-image', args.docker_image]
+    docker_cmd += ['--_in-docker']   # prevent recursive re-invocation
+
+    logger.info(f"Running create_data_tar.py inside container '{image_name}' ...")
+    logger.debug(f"Docker command: {' '.join(docker_cmd)}")
+
+    res = subprocess.run(docker_cmd, check=False)
+    return res.returncode
 
 
 def find_changes_file(path_to_changes: str) -> str:
@@ -170,6 +249,12 @@ def main():
     except Exception as e:
         logger.critical(str(e))
         sys.exit(1)
+
+    # Always run inside Docker (as root) to ensure write access to the output
+    # directory, which is typically owned by root after a Docker-based build.
+    if not args.in_docker:
+        rc = rerun_in_docker(args, changes_path)
+        sys.exit(rc)
 
     # The working directory is where the .changes was generated (and where the debs are expected)
     work_dir = os.path.dirname(changes_path)
