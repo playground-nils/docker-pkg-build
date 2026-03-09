@@ -1,4 +1,4 @@
-    # Use an official Ubuntu base image
+# Use an official Ubuntu base image
 FROM ubuntu:resolute
 
 # Prevent interactive prompts during package installation
@@ -11,12 +11,12 @@ RUN apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-# Necessary fix for resolute fixing this error:
-# - No entry for root in /etc/subuid
-# - invalid idmap
+# sbuild on resolute uses the "unshare" backend which requires:
+#   uidmap      – newuidmap/newgidmap for user-namespace id mapping
+#   mmdebstrap  – used below to create the chroot tarball
+# Also provision subuid/subgid ranges for root so unshare can map ids.
 RUN apt-get update && \
     apt-get install -y uidmap mmdebstrap && \
-    # Ensure root has a 65k subuid/subgid block (idempotent append)
     if ! grep -q '^root:100000:65536$' /etc/subuid; then \
         echo 'root:100000:65536' | tee -a /etc/subuid; \
     fi && \
@@ -26,13 +26,21 @@ RUN apt-get update && \
 
 COPY extra-packages.txt /tmp/extra-packages.txt
 
+# sbuild on resolute defaults to the "unshare" backend (not "schroot"), so it
+# ignores any schroot-style chroot in /srv/chroot/ and instead looks for a
+# pre-built tarball in /root/.cache/sbuild/<distro>-<arch>.tar.
+# We create that tarball directly with mmdebstrap, including ca-certificates
+# so that HTTPS extra-repositories (e.g. github.io PPAs) work during builds.
 RUN EXTRA_PACKAGES=$(tr -s '[:space:]' ',' < /tmp/extra-packages.txt) && \
-    sbuild-createchroot --include="$EXTRA_PACKAGES" \
-                        --arch=arm64 \
-                        --components=main,universe \
-                        resolute \
-                        /srv/chroot/resolute \
-                        http://ports.ubuntu.com
+    mkdir -p /root/.cache/sbuild && \
+    mmdebstrap --variant=buildd \
+               --arch=arm64 \
+               --include="$EXTRA_PACKAGES,ca-certificates,openssl" \
+               --skip=output/mknod \
+               --format=tar \
+               --components=main,universe \
+               resolute \
+               /root/.cache/sbuild/resolute-arm64.tar
 
 # Set working directory
 WORKDIR /workspace
