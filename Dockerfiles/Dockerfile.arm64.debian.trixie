@@ -11,14 +11,6 @@ RUN apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-# Force sbuild to use the schroot backend.
-# sbuild-createchroot is for schroot-managed chroots; this avoids the "unshare" warning.
-#RUN mkdir -p /root/.config/sbuild && \
-#    printf '%s\n' \
-#      '$chroot_mode = "schroot";' \
-#      '$schroot = "schroot";' \
-#    > /root/.config/sbuild/config.pl
-
 COPY extra-packages.txt /tmp/extra-packages.txt
 
 RUN EXTRA_PACKAGES=$(tr -s '[:space:]' ',' < /tmp/extra-packages.txt) && \
