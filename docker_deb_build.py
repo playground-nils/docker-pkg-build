@@ -49,19 +49,19 @@ def parse_arguments() -> argparse.Namespace:
 
     parser.add_argument("-s", "--source-dir",
                         required=False,
-                        default=".",
+                        default=None,
                         help="Path to the source directory containing the debian package source.")
 
     parser.add_argument("-o", "--output-dir",
                         required=False,
-                        default="..",
+                        default=None,
                         help="Path to the output directory for the built package.")
 
     parser.add_argument("-d", "--distro",
                         type=str,
                         choices=['noble', 'questing', 'resolute', 'trixie', 'sid'],
-                        default='noble',
-                        help="The target distribution for the package build.")
+                        default=None,
+                        help="The target distribution for the package build (or rebuild if --rebuild is used). If not specified with --rebuild, all distros will be rebuilt.")
 
     parser.add_argument("-l", "--run-lintian",
                         action='store_true',
@@ -84,6 +84,28 @@ def parse_arguments() -> argparse.Namespace:
                         help="Rebuild the package if it already exists.")
 
     args = parser.parse_args()
+
+    # Validate argument combinations
+    if args.rebuild:
+        # In rebuild mode, source-dir and output-dir should not be specified
+        if args.source_dir is not None:
+            raise Exception("--source-dir cannot be used with --rebuild mode")
+        if args.output_dir is not None:
+            raise Exception("--output-dir cannot be used with --rebuild mode")
+        if args.run_lintian:
+            raise Exception("--run-lintian cannot be used with --rebuild mode")
+        if args.extra_repo:
+            raise Exception("--extra-repo cannot be used with --rebuild mode")
+        if args.extra_package:
+            raise Exception("--extra-package cannot be used with --rebuild mode")
+    else:
+        # In build mode, apply defaults for source-dir, output-dir, and distro if not specified
+        if args.source_dir is None:
+            args.source_dir = "."
+        if args.output_dir is None:
+            args.output_dir = ".."
+        if args.distro is None:
+            raise Exception("--distro is required in build mode (when --rebuild is not used)")
 
     return args
 
@@ -213,15 +235,26 @@ def build_docker_image(arch: str, distro: str) -> bool:
         proc.kill()
         raise Exception(f"Timed out while building docker image from {dockerfile_path}.")
 
-def rebuild_docker_images(build_arch: str) -> None:
+def rebuild_docker_images(build_arch: str, distro: str = None) -> None:
     """
-    Force rebuild of all the containers for the given architecture from Dockerfiles folder
+    Force rebuild of the containers for the given architecture from Dockerfiles folder.
+    If distro is specified, rebuild only that specific distro. Otherwise, rebuild all distros.
     """
 
     docker_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'Dockerfiles')
-    dockerfile_glob = os.path.join(docker_dir, f'Dockerfile.{build_arch}.*')
-    dockerfiles = sorted(glob.glob(dockerfile_glob))
-    logger.info(f"Found Dockerfiles for rebuild: {dockerfiles}")
+
+    if distro:
+        # Rebuild only the specified distro
+        dockerfile_glob = os.path.join(docker_dir, f'Dockerfile.{build_arch}.*.{distro}')
+        dockerfiles = sorted(glob.glob(dockerfile_glob))
+        if not dockerfiles:
+            raise Exception(f"No Dockerfile found for arch={build_arch} and distro={distro}")
+        logger.info(f"Rebuilding docker image for {distro}: {dockerfiles}")
+    else:
+        # Rebuild all distros
+        dockerfile_glob = os.path.join(docker_dir, f'Dockerfile.{build_arch}.*')
+        dockerfiles = sorted(glob.glob(dockerfile_glob))
+        logger.info(f"Rebuilding all docker images: {dockerfiles}")
 
     for dockerfile in dockerfiles:
         suite_name = os.path.basename(dockerfile).split('.')[-1]
@@ -413,7 +446,7 @@ def main() -> None:
 
     # If --rebuild is specified, force rebuild of the docker images and exit
     if args.rebuild:
-        rebuild_docker_images(build_arch)
+        rebuild_docker_images(build_arch, args.distro)
         sys.exit(0)
 
     # Make sure source and output dirs are absolute paths
