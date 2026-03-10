@@ -12,6 +12,8 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 COPY extra-packages.txt /tmp/extra-packages.txt
+COPY keyrings/ /tmp/keyrings/
+COPY sources/trixie/qsc-deb-releases.sources /tmp/qsc-deb-releases.sources
 
 RUN EXTRA_PACKAGES=$(tr -s '[:space:]' ',' < /tmp/extra-packages.txt) && \
     sbuild-createchroot --include="$EXTRA_PACKAGES" \
@@ -19,7 +21,10 @@ RUN EXTRA_PACKAGES=$(tr -s '[:space:]' ',' < /tmp/extra-packages.txt) && \
                         --components=main,contrib,non-free,non-free-firmware \
                         trixie \
                         /srv/chroot/trixie \
-                        http://deb.debian.org/debian
+                        http://deb.debian.org/debian && \
+    mkdir -p /srv/chroot/trixie/etc/apt/keyrings && \
+    cp /tmp/keyrings/qsc-deb-releases.asc /srv/chroot/trixie/etc/apt/keyrings/ && \
+    cp /tmp/qsc-deb-releases.sources /srv/chroot/trixie/etc/apt/sources.list.d/
                         
 # Set working directory
 WORKDIR /workspace

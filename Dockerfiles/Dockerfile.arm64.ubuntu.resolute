@@ -25,12 +25,16 @@ RUN apt-get update && \
     fi
 
 COPY extra-packages.txt /tmp/extra-packages.txt
+COPY keyrings/ /tmp/keyrings/
+COPY sources/resolute/qsc-deb-releases.sources /tmp/qsc-deb-releases.sources
 
 # sbuild on resolute defaults to the "unshare" backend (not "schroot"), so it
 # ignores any schroot-style chroot in /srv/chroot/ and instead looks for a
 # pre-built tarball in /root/.cache/sbuild/<distro>-<arch>.tar.
 # We create that tarball directly with mmdebstrap, including ca-certificates
 # so that HTTPS extra-repositories (e.g. github.io PPAs) work during builds.
+# The customize-hook installs the Qualcomm APT signing key so that callers can
+# use signed-by=/etc/apt/keyrings/qsc-deb-releases.asc instead of trusted=yes.
 RUN EXTRA_PACKAGES=$(tr -s '[:space:]' ',' < /tmp/extra-packages.txt) && \
     mkdir -p /root/.cache/sbuild && \
     mmdebstrap --variant=buildd \
@@ -39,6 +43,7 @@ RUN EXTRA_PACKAGES=$(tr -s '[:space:]' ',' < /tmp/extra-packages.txt) && \
                --skip=output/mknod \
                --format=tar \
                --components=main,universe \
+               --customize-hook='mkdir -p "$1/etc/apt/keyrings" && cp /tmp/keyrings/qsc-deb-releases.asc "$1/etc/apt/keyrings/" && mkdir -p "$1/etc/apt/sources.list.d" && cp /tmp/qsc-deb-releases.sources "$1/etc/apt/sources.list.d/"' \
                resolute \
                /root/.cache/sbuild/resolute-arm64.tar
 
