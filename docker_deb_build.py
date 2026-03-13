@@ -271,6 +271,62 @@ def rebuild_docker_images(build_arch: str, distro: str = None) -> None:
 
         build_docker_image(build_arch, suite_name)
 
+def is_gbp_project(source_dir: str) -> bool:
+    """
+    Return True if the source directory is a gbp-managed project.
+
+    A gbp project is identified by the presence of debian/gbp.conf.
+    Without gbp.conf, gbp buildpackage cannot determine how to create the
+    upstream orig tarball, so we fall back to generating the source package
+    ourselves via dpkg-source.
+    """
+    return os.path.exists(os.path.join(source_dir, 'debian', 'gbp.conf'))
+
+
+def make_source_pkg_cmd(sbuild_cmd: str) -> str:
+    """
+    Return a shell command (run inside the container, cwd=/workspace) that:
+
+      1. Reads the package name and version from debian/changelog.
+      2. Creates an upstream orig tarball from the source tree, excluding the
+         debian/ directory and the .git history (both are not part of upstream).
+      3. Runs dpkg-source -b to produce the .dsc + debian tarball.
+      4. Passes the resulting .dsc to sbuild for the actual binary build.
+
+    All intermediate files (orig tarball, .dsc, debian.tar.*) are written to
+    /workspace (the parent of /workspace/src) so they don't pollute the source
+    tree and are accessible to sbuild.
+
+    This path is taken for 3.0 (quilt) packages that are NOT managed by gbp
+    (i.e. no debian/gbp.conf).  gbp is still used for proper gbp projects.
+    """
+    return (
+        "set -e; "
+        "cd /workspace; "
+        # Read package metadata from debian/changelog
+        "PKG=$(dpkg-parsechangelog -l /workspace/src/debian/changelog -S Source); "
+        "VER=$(dpkg-parsechangelog -l /workspace/src/debian/changelog -S Version); "
+        # Strip the debian revision (everything after the last '-') to get the upstream version.
+        # e.g. '1-1' -> '1',  '6.12.0-1' -> '6.12.0'
+        "UPSTREAM_VER=$(echo \"$VER\" | sed 's/-[^-]*$//'); "
+        "ORIG_TAR=\"${PKG}_${UPSTREAM_VER}.orig.tar.gz\"; "
+        "echo \"[source-pkg] Package : $PKG  Version: $VER  Upstream: $UPSTREAM_VER\"; "
+        # Create the orig tarball — exclude debian/ (packaging overlay) and .git/
+        # (version-control history is not part of the upstream source).
+        "echo \"[source-pkg] Creating orig tarball: $ORIG_TAR (may take a while for large trees)\"; "
+        "tar czf \"$ORIG_TAR\" --exclude=./debian --exclude=./.git -C /workspace/src .; "
+        # Build the source package (.dsc + debian.tar.*)
+        "echo \"[source-pkg] Running dpkg-source -b ...\"; "
+        "dpkg-source -b /workspace/src; "
+        # Locate the generated .dsc
+        "DSC_FILE=$(ls /workspace/${PKG}_${VER}.dsc 2>/dev/null | head -1); "
+        "[ -n \"$DSC_FILE\" ] || { echo \"ERROR: .dsc not found after dpkg-source -b\"; exit 1; }; "
+        "echo \"[source-pkg] Source package ready: $DSC_FILE\"; "
+        # Hand off to sbuild
+        f"{sbuild_cmd} \"$DSC_FILE\""
+    )
+
+
 def build_package_in_docker(image_name: str, source_dir: str, output_dir: str, build_arch: str, distro: str, run_lintian: bool, extra_repo: str, extra_package: str) -> bool:
     """
     Build the debian package inside the given docker image.
@@ -315,9 +371,21 @@ def build_package_in_docker(image_name: str, source_dir: str, output_dir: str, b
         raise Exception(f"Failed to read {format_file}: {e}")
 
     if 'native' in fmt:
+        # Native package: run sbuild directly in the source directory.
         build_cmd = sbuild_cmd
+        logger.debug("Source format: native — using sbuild directly")
     elif 'quilt' in fmt:
-        build_cmd = gbp_cmd
+        if is_gbp_project(source_dir):
+            # gbp-managed quilt project: use gbp buildpackage to create the orig
+            # tarball from git history and drive sbuild.
+            build_cmd = gbp_cmd
+            logger.debug("Source format: quilt + gbp.conf — using gbp buildpackage")
+        else:
+            # Non-gbp quilt project (e.g. kernel injected with a debian/ overlay):
+            # generate the orig tarball and .dsc via dpkg-source, then pass the
+            # .dsc to sbuild so it can build the quilt package correctly.
+            build_cmd = make_source_pkg_cmd(sbuild_cmd)
+            logger.debug("Source format: quilt (no gbp.conf) — generating source package before sbuild")
     else:
         raise Exception(f"Unsupported debian/source/format in {format_file}. Expected to contain 'native' or 'quilt', got: {fmt!r}")
 
