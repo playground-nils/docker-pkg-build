@@ -83,6 +83,11 @@ def parse_arguments() -> argparse.Namespace:
                         action='store_true',
                         help="Rebuild the package if it already exists.")
 
+    parser.add_argument("-k", "--skip-gbp",
+                        action='store_true',
+                        default=False,
+                        help="When building with Quilt format, skip GBP (Git Build Package) for the creation of the .orig tarball and manually handle the source package creation.")
+
     args = parser.parse_args()
 
     # Validate argument combinations
@@ -98,6 +103,9 @@ def parse_arguments() -> argparse.Namespace:
             raise Exception("--extra-repo cannot be used with --rebuild mode")
         if args.extra_package:
             raise Exception("--extra-package cannot be used with --rebuild mode")
+        if args.skip_gbp:
+            raise Exception("--skip-gbp cannot be used with --rebuild mode")
+
     else:
         # In build mode, apply defaults for source-dir, output-dir, and distro if not specified
         if args.source_dir is None:
@@ -271,17 +279,11 @@ def rebuild_docker_images(build_arch: str, distro: str = None) -> None:
 
         build_docker_image(build_arch, suite_name)
 
-def is_gbp_project(source_dir: str) -> bool:
+def is_git_repo(source_dir: str) -> bool:
     """
-    Return True if the source directory is a gbp-managed project.
-
-    A gbp project is identified by the presence of debian/gbp.conf.
-    Without gbp.conf, gbp buildpackage cannot determine how to create the
-    upstream orig tarball, so we fall back to generating the source package
-    ourselves via dpkg-source.
+    Return True if the source directory is a git repository.
     """
-    return os.path.exists(os.path.join(source_dir, 'debian', 'gbp.conf'))
-
+    return os.path.exists(os.path.join(source_dir, '.git'))
 
 def make_source_pkg_cmd(sbuild_cmd: str) -> str:
     """
@@ -327,7 +329,7 @@ def make_source_pkg_cmd(sbuild_cmd: str) -> str:
     )
 
 
-def build_package_in_docker(image_name: str, source_dir: str, output_dir: str, build_arch: str, distro: str, run_lintian: bool, extra_repo: str, extra_package: str) -> bool:
+def build_package_in_docker(image_name: str, source_dir: str, output_dir: str, build_arch: str, distro: str, run_lintian: bool, extra_repo: str, extra_package: str, skip_gbp: bool) -> bool:
     """
     Build the debian package inside the given docker image.
     source_dir: path to the debian package source (mounted into the container)
@@ -375,17 +377,25 @@ def build_package_in_docker(image_name: str, source_dir: str, output_dir: str, b
         build_cmd = sbuild_cmd
         logger.debug("Source format: native — using sbuild directly")
     elif 'quilt' in fmt:
-        if is_gbp_project(source_dir):
-            # gbp-managed quilt project: use gbp buildpackage to create the orig
-            # tarball from git history and drive sbuild.
-            build_cmd = gbp_cmd
-            logger.debug("Source format: quilt + gbp.conf — using gbp buildpackage")
-        else:
-            # Non-gbp quilt project (e.g. kernel injected with a debian/ overlay):
-            # generate the orig tarball and .dsc via dpkg-source, then pass the
-            # .dsc to sbuild so it can build the quilt package correctly.
+        if not is_git_repo(source_dir):
+            logger.warning(f"Source format is quilt but {source_dir} is not a git repository. This typically means the source tree was copied without the .git history, which is required for quilt format.")
+            logger.warning(f"The .dsc generation will be performed manually via dpkg-source, but this may lead to issues with the build if the debian/patches/ directory relies on git history (e.g. for patch naming or series generation). Consider using a git repository with gbp for better support of quilt format.")
             build_cmd = make_source_pkg_cmd(sbuild_cmd)
-            logger.debug("Source format: quilt (no gbp.conf) — generating source package before sbuild")
+
+        else: # git repository present
+            if skip_gbp:
+                # Non-gbp quilt project (e.g. kernel injected with a debian/ overlay):
+                # generate the orig tarball and .dsc via dpkg-source, then pass the
+                # .dsc to sbuild so it can build the quilt package correctly.
+                build_cmd = make_source_pkg_cmd(sbuild_cmd)
+                logger.warning("Skipping gbp buildpackage for quilt source format as per --skip-gbp. Manually generating source package with dpkg-source may lead to issues if the debian/patches/ directory relies on git history. Consider using gbp for better support of quilt format.")
+
+            else:
+                # gbp-managed quilt project: use gbp buildpackage to create the orig
+                # tarball from git history and drive sbuild.
+                build_cmd = gbp_cmd
+                logger.debug("Source format: quilt + gbp.conf — using gbp buildpackage")
+
     else:
         raise Exception(f"Unsupported debian/source/format in {format_file}. Expected to contain 'native' or 'quilt', got: {fmt!r}")
 
@@ -540,7 +550,7 @@ def main() -> None:
     else:
         logger.info(f"Docker image '{image_name}' is present locally.")
 
-    ret = build_package_in_docker(image_name, args.source_dir, args.output_dir, build_arch, args.distro, args.run_lintian, args.extra_repo, args.extra_package)
+    ret = build_package_in_docker(image_name, args.source_dir, args.output_dir, build_arch, args.distro, args.run_lintian, args.extra_repo, args.extra_package, args.skip_gbp)
 
     if ret:
         sys.exit(0)
