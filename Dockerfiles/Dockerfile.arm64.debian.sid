@@ -38,7 +38,7 @@ RUN EXTRA_PACKAGES=$(tr -s '[:space:]' ',' < /tmp/extra-packages.txt) && \
     mkdir -p /root/.cache/sbuild && \
     mmdebstrap --variant=buildd \
                --arch=arm64 \
-               --include="$EXTRA_PACKAGES,ca-certificates,openssl" \
+               --include="$EXTRA_PACKAGES" \
                --skip=output/mknod \
                --format=tar \
                --components=main,contrib,non-free,non-free-firmware \
