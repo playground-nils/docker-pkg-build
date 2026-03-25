@@ -11,3 +11,5 @@ build-essential
 debhelper
 abigail-tools
 ca-certificates
+e2fsprogs
+dosfstools
