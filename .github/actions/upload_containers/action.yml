@@ -1,0 +1,47 @@
+name: Uploads the containers
+description: |
+  This Github Action uploads the built containers.
+
+inputs:
+
+  arch:
+    description: The architecture to build for. Ex amd64, arm64, etc
+    required: true
+
+  push-to-ghcr:
+    description: Whether to push the built image to GitHub Container Registry
+    required: true
+    default: "true"
+
+  token:
+    description: PAT token
+    required: true
+
+  username:
+    description: Username for the PAT token
+    required: true
+
+runs:
+  using: "composite"
+
+  steps:
+
+    - name: Push to GHCR
+      if: ${{ inputs.push-to-ghcr == 'true' }}
+      shell: bash
+      run: |
+        echo ${{inputs.token}} | docker login ghcr.io -u ${{inputs.username}} --password-stdin
+
+        # UBUNTU IMAGES
+        docker push ghcr.io/${{env.QCOM_ORG_NAME}}/${{env.IMAGE_NAME}}:noble
+        docker push ghcr.io/${{env.QCOM_ORG_NAME}}/${{env.IMAGE_NAME}}:questing
+        docker push ghcr.io/${{env.QCOM_ORG_NAME}}/${{env.IMAGE_NAME}}:resolute
+
+        # DEBIAN IMAGES
+        docker push ghcr.io/${{env.QCOM_ORG_NAME}}/${{env.IMAGE_NAME}}:trixie
+        docker push ghcr.io/${{env.QCOM_ORG_NAME}}/${{env.IMAGE_NAME}}:sid
+
+        # TODO RPM IMAGES
+        for image in $(docker image ls | grep -oiE "ghcr.io/${{env.QCOM_ORG_NAME}}/${{env.IMAGE_NAME}}:${{inputs.arch}}-(fedora|rhel|redhat|centos)\.[^\s]*"; do
+          echo docker push ${image}
+        done
