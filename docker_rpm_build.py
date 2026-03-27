@@ -306,10 +306,11 @@ def rebuild_docker_images(build_arch: str, distro: str = None) -> None:
         )
 
     for dockerfile in dockerfiles:
-        suite_name = os.path.basename(dockerfile).split('.')[-1]
+        # suite_name needs to contain family and release, e.g. fedora.44, fedora.rawhide, etc.
+        suite_name = '.'.join(os.path.basename(dockerfile).split('.')[-2:])
         image_name = DOCKER_IMAGE_NAME_FMT.format(build_arch=build_arch, suite_name=suite_name)
 
-        logger.debug(f"Rebuilding Docker image '{image_name}' from {dockerfile}")
+        logger.debug(f"Rebuilding Docker image '{image_name}' from {dockerfile}...")
 
         # Delete/purge the current image if it exists
         try:
