@@ -1,0 +1,10 @@
+# Core packages required for building RPMs on Fedora Rawhide
+ca-certificates
+curl
+dnf
+gcc
+git
+make
+python3
+python3-pip
+rpm-build

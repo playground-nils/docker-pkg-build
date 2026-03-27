@@ -1,0 +1,2 @@
+# Additional optional packages for RPM build environment
+# (can be left empty if not needed)
