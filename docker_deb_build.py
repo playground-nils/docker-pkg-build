@@ -30,6 +30,37 @@ from color_logger import logger
 # Example: ghcr.io/qualcomm-linux/pkg-builder:noble
 DOCKER_IMAGE_NAME_FMT = "ghcr.io/qualcomm-linux/pkg-builder:{suite_name}"
 
+def _discover_available_distros() -> list:
+    """
+    Identify supported debian-based distros.
+    Search for Dockerfiles that derive from a debian or ubuntu
+    base image, and use their names to create the list of supported
+    distributions for this build tool.
+    """
+    import re, os
+    docker_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Dockerfiles")
+    distros = set()
+    if os.path.isdir(docker_dir):
+        for entry in os.listdir(docker_dir):
+            parts = entry.split(".")
+            if parts[0] and parts[0] == "Dockerfile":
+                distro = ".".join(parts[2:])
+                dockerfile_path = os.path.join(docker_dir, entry)
+                try:
+                    with open(dockerfile_path, "r", errors="ignore") as f:
+                        for line in f:
+                            line = line.strip().lower()
+                            if line.startswith("from"):
+                                # Check for known debian‑based base images
+                                if any(keyword in line for keyword in ("debian", "ubuntu")):
+                                    distros.add(distro)
+                                    break
+                except Exception:
+                    # If the Dockerfile cannot be read, skip it
+                    continue
+    return sorted(distros)
+
+
 def parse_arguments() -> argparse.Namespace:
     """
     Parse command line arguments for the script.
@@ -256,16 +287,19 @@ def rebuild_docker_images(distro: str = None) -> None:
             raise Exception(f"No Dockerfile found for distro={distro}")
         logger.info(f"Rebuilding docker image for {distro}: {dockerfiles}")
     else:
-        # Rebuild all distros
-        dockerfile_glob = os.path.join(docker_dir, f'Dockerfile.*.*')
-        dockerfiles = sorted(glob.glob(dockerfile_glob))
+        # Rebuild all available debian-based distros
+        dockerfiles = []
+        for distro in _discover_available_distros():
+            dockerfile_glob = os.path.join(docker_dir, f'Dockerfile.*.*{distro}')
+            dockerfiles.extend(glob.glob(dockerfile_glob))
+        dockerfiles = sorted(dockerfiles)
         logger.info(f"Rebuilding all docker images: {dockerfiles}")
 
     for dockerfile in dockerfiles:
         suite_name = os.path.basename(dockerfile).split('.')[-1]
         image_name = DOCKER_IMAGE_NAME_FMT.format(suite_name=suite_name)
 
-        logger.debug(f"Rebuilding docker image '{image_name}' from local Dockerfile...")
+        logger.debug(f"Rebuilding Docker image '{image_name}' from {dockerfile}...")
 
         # Delete/purge the current image if it exists
         try:
