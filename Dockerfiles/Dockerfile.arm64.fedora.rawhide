@@ -6,13 +6,13 @@ ENV DNF_YES=1
 
 # Install essential build tools and RPM utilities
 COPY base-packages.fedora.txt /tmp/base-packages.txt
-RUN dnf -y install $(cat /tmp/base-packages.txt) && \
+RUN dnf -y install $(sed 's/#.*$//' /tmp/base-packages.txt) && \
     dnf clean all && \
     rm -rf /var/cache/dnf
 
 # Install any extra packages required for the build environment
 COPY extra-packages.fedora.txt /tmp/extra-packages.txt
-RUN dnf -y install $(tr -s '\\n' ' ' < /tmp/extra-packages.txt) && \
+RUN dnf -y install $(sed 's/#.*$//' /tmp/extra-packages.txt | tr -s '\\n' ' ') && \
     dnf clean all && \
     rm -rf /var/cache/dnf
 
