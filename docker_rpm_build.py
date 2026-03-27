@@ -253,7 +253,7 @@ def build_docker_image(arch: str, distro: str) -> bool:
     logger.debug(f"Building docker image '{image_name}' for arch '{arch}' from Dockerfile: {dockerfile_path}")
 
     if not os.path.exists(dockerfile_path):
-        logger.error(f"No local Dockerfile found for arch '{arch}' at expected path: {dockerfile_path}. Cannot build image '{image}'.")
+        logger.error(f"No local Dockerfile found for arch '{arch}' at expected path: {dockerfile_path}. Cannot build image '{image_name}'.")
         return False
  
     build_cmd = ["docker", "build", "-t", image_name, "-f", dockerfile_path, docker_dir]
