@@ -79,7 +79,7 @@ def parse_arguments() -> argparse.Namespace:
 
     parser.add_argument("-r", "--rebuild",
                         action='store_true',
-                        help="Rebuild the package if it already exists.")
+                        help="Force rebuild of the Docker image and exit.")
 
     parser.add_argument("-k", "--skip-gbp",
                         action='store_true',
