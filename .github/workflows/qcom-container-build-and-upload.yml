@@ -1,16 +1,14 @@
 name: Container Build And Upload
 description: |
   Builds and uploads to GHCR (GitHub Container Registry) the container used to build the Qualcomm debian packages.
-  This workflow will assumes the build architecture is amd64 (x86_64) since the github's 'ubuntu-latest' runs-on tag
-  is used. Using docker's buildx, the Dockerfile in this repo's docker/ folder will be built for amd64 and cross-compiled
-  for arm64.
+  Builds natively on an arm64 self-hosted runner. Images are uploaded on push to main, scheduled runs, and manual dispatches.
 
 on:
   schedule:
     # Runs at 00:00 UTC every Monday
     - cron: '0 0 * * 1'
 
-  pull_request_target:
+  pull_request:
     branches:
       - main
     paths:
@@ -30,6 +28,7 @@ on:
 
 permissions:
   contents: read
+  packages: write
 
 env:
   QCOM_ORG_NAME: "qualcomm-linux"
@@ -45,24 +44,20 @@ jobs:
     runs-on: ubuntu-24.04-arm
     steps:
       
-      # PRs from forks (pull_request_target): check out the PR's fork + exact commit
-      - name: Checkout PR head (fork-safe)
-        if: ${{ github.event_name == 'pull_request_target' }}
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ github.event.pull_request.head.repo.full_name }}
-          ref: ${{ github.event.pull_request.head.sha }}
-          persist-credentials: false
-
-      # Push / schedule / manual: normal checkout
       - name: Checkout repository
-        if: ${{ github.event_name != 'pull_request_target' }}
         uses: actions/checkout@v4
 
       - name: Build Images
         uses: ./.github/actions/build_container
         with:
           arch: arm64
-          push-to-ghcr: ${{ github.event_name != 'pull_request_target' }}
+
+      - name: Upload Images
+        uses: ./.github/actions/upload_containers
+        # Only upload on trusted events that land code on main
+        if: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+        with:
+          arch: arm64
+          push-to-ghcr: "true"
           token: ${{ secrets.DEB_PKG_BOT_CI_TOKEN }}
           username: ${{ vars.DEB_PKG_BOT_CI_USERNAME }}

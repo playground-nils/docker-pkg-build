@@ -1,6 +1,6 @@
 name: Builds the container and chroots
 description: |
-  This Github Actions builds the container and sets up the chroot environment for building packages for noble and questing.
+  This Github Action builds the containers and sets up the chroot environment for building packages for noble and questing.
 
 inputs:
 
@@ -29,20 +29,3 @@ runs:
     - name: Build noble and questing containers
       shell: bash
       run: ./docker_deb_build.py --rebuild --no-update-check
-
-    - name: Push to GHCR
-      if: ${{inputs.push-to-ghcr}} == 'true'
-      shell: bash
-      run: |
-        echo ${{inputs.token}} | docker login ghcr.io -u ${{inputs.username}} --password-stdin
-
-        # UBUNTU IMAGES
-        docker push ghcr.io/${{env.QCOM_ORG_NAME}}/${{env.IMAGE_NAME}}:${{inputs.arch}}-noble
-        docker push ghcr.io/${{env.QCOM_ORG_NAME}}/${{env.IMAGE_NAME}}:${{inputs.arch}}-questing
-        docker push ghcr.io/${{env.QCOM_ORG_NAME}}/${{env.IMAGE_NAME}}:${{inputs.arch}}-resolute
-
-        # DEBIAN IMAGES
-        docker push ghcr.io/${{env.QCOM_ORG_NAME}}/${{env.IMAGE_NAME}}:${{inputs.arch}}-trixie
-        docker push ghcr.io/${{env.QCOM_ORG_NAME}}/${{env.IMAGE_NAME}}:${{inputs.arch}}-sid
-
-
