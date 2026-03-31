@@ -1,10 +1,18 @@
 # Core packages required for building RPMs on Fedora Rawhide
+bison
 ca-certificates
+ccache
 curl
 dnf
+elfutils-libelf-devel
+flex
 gcc
 git
+libdwarf-devel
 make
+ncurses-devel
+openssl-devel
 python3
 python3-pip
+qt-devel
 rpm-build
