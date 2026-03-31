@@ -26,6 +26,10 @@ runs:
 
   steps:
 
+    - name: Log in to GHCR
+      if: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+      uses: docker/login-action@v3
+
     - name: Push to GHCR
       if: ${{ inputs.push-to-ghcr == 'true' }}
       shell: bash
@@ -42,6 +46,6 @@ runs:
         docker push ghcr.io/${{env.QCOM_ORG_NAME}}/${{env.IMAGE_NAME}}:sid
 
         # TODO RPM IMAGES
-        for image in $(docker image ls | grep -oiE "ghcr.io/${{env.QCOM_ORG_NAME}}/${{env.IMAGE_NAME}}:${{inputs.arch}}-(fedora|rhel|redhat|centos)\.[^\s]*"; do
+        for image in $(docker image ls | grep -oiE "ghcr.io/${{env.QCOM_ORG_NAME}}/${{env.IMAGE_NAME}}:(fedora|rhel|redhat|centos)\.[^\s]*"; do
           echo docker push ${image}
         done

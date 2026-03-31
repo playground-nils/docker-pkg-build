@@ -1,0 +1,31 @@
+name: Build Debian Containers
+description: |
+  Builds the Debian-based containers (noble, questing, resolute, trixie, sid).
+
+inputs:
+
+  arch:
+    description: The architecture to build for. Ex amd64, arm64, etc
+    required: true
+
+  push-to-ghcr:
+    description: Whether to push the built image to GitHub Container Registry
+    required: true
+    default: "true"
+
+  token:
+    description: PAT token
+    required: true
+
+  username:
+    description: Username for the PAT token
+    required: true
+
+runs:
+  using: "composite"
+
+  steps:
+
+    - name: Build all Debian containers
+      shell: bash
+      run: ./docker_deb_build.py --rebuild --no-update-check

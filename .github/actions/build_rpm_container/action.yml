@@ -1,6 +1,6 @@
-name: Builds the container and chroots
+name: Build RPM Containers
 description: |
-  This Github Action builds the containers and sets up the chroot environment for building packages for noble and questing.
+  Builds the RPM-based containers.
 
 inputs:
 
@@ -23,13 +23,9 @@ inputs:
 
 runs:
   using: "composite"
-  
+
   steps:
 
-    - name: Build noble and questing containers
-      shell: bash
-      run: ./docker_deb_build.py --rebuild --no-update-check
-
-    - name: Build RPM-based containers
+    - name: Build RPM containers
       shell: bash
       run: ./docker_rpm_build.py --rebuild --no-update-check

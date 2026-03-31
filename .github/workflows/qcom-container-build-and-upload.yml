@@ -13,7 +13,8 @@ on:
       - main
     paths:
       - '.github/workflows/qcom-container-build-and-upload.yml'
-      - '.github/actions/build_container/action.yml'
+      - '.github/actions/build_deb_container/action.yml'
+      - '.github/actions/build_rpm_container/action.yml'
       - 'Dockerfiles/**'
 
   push:
@@ -22,7 +23,8 @@ on:
       - develop
     paths:
       - '.github/workflows/qcom-container-build-and-upload.yml'
-      - '.github/actions/build_container/action.yml'
+      - '.github/actions/build_deb_container/action.yml'
+      - '.github/actions/build_rpm_container/action.yml'
       - 'Dockerfiles/**'
 
   workflow_dispatch:
@@ -41,34 +43,23 @@ jobs:
   # Build the arm64 natively using a self-hosted runner on an arm64 host
   # Cross compiling the image using buildx on an x86_64 host was tried but failed due to
   # issues with qemu and multiarch support in docker buildx.
-  build-image-arm64:
+  build-deb-arm64:
     runs-on: ubuntu-24.04-arm
     steps:
-      
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Build Images
-        run: ./docker_deb_build.py --rebuild --no-update-check
-
-
-      - name: Log in to GHCR
-        if: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build Debian Images
+        uses: ./.github/actions/build_deb_container
 
       - name: Upload Images
-        # Only upload on trusted events that land code on main
-        if: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
-        run: |
-          # UBUNTU IMAGES
-          docker push ghcr.io/${{env.QCOM_ORG_NAME}}/${{env.IMAGE_NAME}}:noble
-          docker push ghcr.io/${{env.QCOM_ORG_NAME}}/${{env.IMAGE_NAME}}:questing
-          docker push ghcr.io/${{env.QCOM_ORG_NAME}}/${{env.IMAGE_NAME}}:resolute
+        uses: ./.github/actions/upload_containers
 
-          # DEBIAN IMAGES
-          docker push ghcr.io/${{env.QCOM_ORG_NAME}}/${{env.IMAGE_NAME}}:trixie
-          docker push ghcr.io/${{env.QCOM_ORG_NAME}}/${{env.IMAGE_NAME}}:sid
+  build-rpm-arm64:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build RPM Images
+        uses: ./.github/actions/build_rpm_container
