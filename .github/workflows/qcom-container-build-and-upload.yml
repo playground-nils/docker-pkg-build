@@ -19,6 +19,7 @@ on:
   push:
     branches:
       - main
+      - develop
     paths:
       - '.github/workflows/qcom-container-build-and-upload.yml'
       - '.github/actions/build_container/action.yml'
