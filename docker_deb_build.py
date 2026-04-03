@@ -26,11 +26,9 @@ import getpass
 from color_logger import logger
 
 # Docker image name template
-# Build arch and suite name will be formatted later
-# build_arch: 'amd64' or 'arm64'
 # suite_name: 'noble', 'questing', 'sid'
-# Example: ghcr.io/qualcomm-linux/pkg-builder:arm64-noble
-DOCKER_IMAGE_NAME_FMT = "ghcr.io/qualcomm-linux/pkg-builder:{build_arch}-{suite_name}"
+# Example: ghcr.io/qualcomm-linux/pkg-builder:noble
+DOCKER_IMAGE_NAME_FMT = "ghcr.io/qualcomm-linux/pkg-builder:{suite_name}"
 
 def parse_arguments() -> argparse.Namespace:
     """
@@ -180,12 +178,11 @@ def check_docker_dependencies(timeout: int = 20) -> bool:
     except subprocess.TimeoutExpired:
         raise Exception("Timed out while trying to contact the Docker daemon. Is it running?")
 
-def build_docker_image(arch: str, distro: str) -> bool:
+def build_docker_image(distro: str) -> bool:
     """
     Build a Docker image from the local Dockerfile.
 
     Args:
-        arch (str): The architecture (e.g., 'amd64', 'arm64').
         distro (str): The distribution (e.g., 'noble', 'questing').
 
     Returns:
@@ -198,20 +195,20 @@ def build_docker_image(arch: str, distro: str) -> bool:
     this_script_dir = os.path.dirname(os.path.abspath(__file__))
     docker_dir = os.path.normpath(os.path.join(this_script_dir, 'Dockerfiles'))
     context_dir = docker_dir
-    # Find the Dockerfile matching the pattern Dockerfile.{arch}.*.{distro}
-    pattern = f"Dockerfile.{arch}.*.{distro}"
+    # Find the Dockerfile matching the pattern Dockerfile.*.{distro}
+    pattern = f"Dockerfile.*.{distro}"
     matches = glob.glob(os.path.join(docker_dir, pattern))
     if not matches:
         raise Exception(f"No Dockerfile found matching pattern: {pattern} in {docker_dir}")
     dockerfile_name = os.path.basename(matches[0])
     dockerfile_path = os.path.join(docker_dir, dockerfile_name)
 
-    image_name = DOCKER_IMAGE_NAME_FMT.format(build_arch=arch, suite_name=distro)
+    image_name = DOCKER_IMAGE_NAME_FMT.format(suite_name=distro)
 
-    logger.debug(f"Building docker image '{image_name}' for arch '{arch}' from Dockerfile: {dockerfile_path}")
+    logger.debug(f"Building docker image '{image_name}' from Dockerfile: {dockerfile_path}")
     
     if not os.path.exists(dockerfile_path):
-        logger.error(f"No local Dockerfile found for arch '{arch}' at expected path: {dockerfile_path}. Cannot build image '{image}'.")
+        logger.error(f"No local Dockerfile found for distro '{distro}' at expected path: {dockerfile_path}. Cannot build image '{image_name}'.")
         return False
 
     build_cmd = ["docker", "build", "-t", image_name, "-f", dockerfile_path, context_dir]
@@ -243,9 +240,9 @@ def build_docker_image(arch: str, distro: str) -> bool:
         proc.kill()
         raise Exception(f"Timed out while building docker image from {dockerfile_path}.")
 
-def rebuild_docker_images(build_arch: str, distro: str = None) -> None:
+def rebuild_docker_images(distro: str = None) -> None:
     """
-    Force rebuild of the containers for the given architecture from Dockerfiles folder.
+    Force rebuild of the containers from Dockerfiles folder.
     If distro is specified, rebuild only that specific distro. Otherwise, rebuild all distros.
     """
 
@@ -253,20 +250,20 @@ def rebuild_docker_images(build_arch: str, distro: str = None) -> None:
 
     if distro:
         # Rebuild only the specified distro
-        dockerfile_glob = os.path.join(docker_dir, f'Dockerfile.{build_arch}.*.{distro}')
+        dockerfile_glob = os.path.join(docker_dir, f'Dockerfile.*.{distro}')
         dockerfiles = sorted(glob.glob(dockerfile_glob))
         if not dockerfiles:
-            raise Exception(f"No Dockerfile found for arch={build_arch} and distro={distro}")
+            raise Exception(f"No Dockerfile found for distro={distro}")
         logger.info(f"Rebuilding docker image for {distro}: {dockerfiles}")
     else:
         # Rebuild all distros
-        dockerfile_glob = os.path.join(docker_dir, f'Dockerfile.{build_arch}.*')
+        dockerfile_glob = os.path.join(docker_dir, f'Dockerfile.*.*')
         dockerfiles = sorted(glob.glob(dockerfile_glob))
         logger.info(f"Rebuilding all docker images: {dockerfiles}")
 
     for dockerfile in dockerfiles:
         suite_name = os.path.basename(dockerfile).split('.')[-1]
-        image_name = DOCKER_IMAGE_NAME_FMT.format(build_arch=build_arch, suite_name=suite_name)
+        image_name = DOCKER_IMAGE_NAME_FMT.format(suite_name=suite_name)
 
         logger.debug(f"Rebuilding docker image '{image_name}' from local Dockerfile...")
 
@@ -277,7 +274,7 @@ def rebuild_docker_images(build_arch: str, distro: str = None) -> None:
         except subprocess.CalledProcessError:
             logger.debug(f"No existing image '{image_name}' to delete.")
 
-        build_docker_image(build_arch, suite_name)
+        build_docker_image(suite_name)
 
 def is_git_repo(source_dir: str) -> bool:
     """
@@ -329,12 +326,11 @@ def make_source_pkg_cmd(sbuild_cmd: str) -> str:
     )
 
 
-def build_package_in_docker(image_name: str, source_dir: str, output_dir: str, build_arch: str, distro: str, run_lintian: bool, extra_repo: str, extra_package: str, skip_gbp: bool) -> bool:
+def build_package_in_docker(image_name: str, source_dir: str, output_dir: str, distro: str, run_lintian: bool, extra_repo: str, extra_package: str, skip_gbp: bool) -> bool:
     """
     Build the debian package inside the given docker image.
     source_dir: path to the debian package source (mounted into the container)
     output_dir: path to the output directory for the built package (mounted into the container)
-    build_arch: architecture string for the build (e.g. 'arm64')
     distro: target distribution string (e.g. 'noble')
     run_lintian: whether to run lintian on the built package
     extra_repo: list of additional APT repositories to include
@@ -354,7 +350,7 @@ def build_package_in_docker(image_name: str, source_dir: str, output_dir: str, b
     extra_package_option = " ".join(f"--extra-package='{pkg}'" for pkg in extra_package) if extra_package else ""
     lintian_option = '--no-run-lintian' if not run_lintian else ""
     # --no-clean-source: skip dpkg-buildpackage --clean on host (avoids build-dep check outside chroot)
-    sbuild_cmd = f"sbuild --no-clean-source --build-dir=/workspace/output --host=arm64 --build={build_arch} --dist={distro} {lintian_option} {extra_repo_option} {extra_package_option}"
+    sbuild_cmd = f"sbuild --no-clean-source --build-dir=/workspace/output --host=arm64 --build=arm64 --dist={distro} {lintian_option} {extra_repo_option} {extra_package_option}"
 
     # Ensure git inside the container treats the mounted checkout as safe
     git_safe_cmd = "git config --global --add safe.directory /workspace/src"
@@ -502,29 +498,17 @@ def main() -> None:
     if not args.no_update_check:
         check_if_repo_up_to_date()
 
-    # In sbuild terms, the build architecture is the architecture of the machine doing the build,
-    # aka the architecture of the machine running this script.
-    build_arch = platform.machine()
-
-    logger.debug(f"The builder arch is {build_arch}")
-
-    # Normalize the arch string for use later
-    if build_arch == "x86_64":
-        build_arch = "amd64"
-        logger.debug("The build will be a cross-compilation amd64 -> arm64")
-        raise Exception("AMD64 host is not supported anymore due to issues with cross-building. Please run this script on an ARM64 host.")
-    elif build_arch == "aarch64":
-        build_arch = "arm64"
-        logger.debug("The build will be a native build arm64 -> arm64")
-    else:
-        raise Exception("Invalid base arch")
+    # Only ARM64 hosts are supported.
+    if platform.machine() != "aarch64":
+        raise Exception(f"Unsupported host architecture: {platform.machine()}. Only ARM64 (aarch64) hosts are supported.")
+    logger.debug("Host architecture: arm64")
 
     # Verify Docker is available and the current user can talk to the daemon
     check_docker_dependencies()
 
     # If --rebuild is specified, force rebuild of the docker images and exit
     if args.rebuild:
-        rebuild_docker_images(build_arch, args.distro)
+        rebuild_docker_images(args.distro)
         sys.exit(0)
 
     # Make sure source and output dirs are absolute paths
@@ -532,12 +516,11 @@ def main() -> None:
         args.source_dir = os.path.abspath(args.source_dir)
     if not os.path.isabs(args.output_dir):
         args.output_dir = os.path.abspath(args.output_dir)
-    
+
     logger.debug(f"The source dir is {args.source_dir}")
     logger.debug(f"The output dir is {args.output_dir}")
 
-    image_name = DOCKER_IMAGE_NAME_FMT.format(build_arch=build_arch, suite_name=args.distro)
-    
+    image_name = DOCKER_IMAGE_NAME_FMT.format(suite_name=args.distro)
 
     image_exist = subprocess.run(["docker", "image", "inspect", image_name],
                                  stdout=subprocess.DEVNULL,
@@ -546,11 +529,11 @@ def main() -> None:
                                  timeout=10)
     if image_exist.returncode != 0:
         logger.warning(f"Docker image '{image_name}' is not present locally.")
-        build_docker_image(build_arch, args.distro)
+        build_docker_image(args.distro)
     else:
         logger.info(f"Docker image '{image_name}' is present locally.")
 
-    ret = build_package_in_docker(image_name, args.source_dir, args.output_dir, build_arch, args.distro, args.run_lintian, args.extra_repo, args.extra_package, args.skip_gbp)
+    ret = build_package_in_docker(image_name, args.source_dir, args.output_dir, args.distro, args.run_lintian, args.extra_repo, args.extra_package, args.skip_gbp)
 
     if ret:
         sys.exit(0)
