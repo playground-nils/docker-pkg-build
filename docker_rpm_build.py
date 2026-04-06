@@ -7,11 +7,11 @@
 """
 docker_rpm_build.py
 
-Helper script to build an RPM package inside a Fedora‑based Docker container.
+Helper script to build an RPM package inside a Fedora-based Docker container.
 Supports Fedora Rawhide (default) and can be extended to other Fedora,
 CentOS, or RHEL versions by providing the appropriate Docker image.
-The script mirrors the architectural choices of the original Debian‑builder
-while replacing Debian‑specific tooling (sbuild/gbp) with RPM‑centric
+The script mirrors the architectural choices of the original Debian-builder
+while replacing Debian-specific tooling (sbuild/gbp) with RPM-centric
 commands (rpmbuild, mock, dnf).
 """
 
@@ -57,7 +57,7 @@ def _normalize_distro(distro: str) -> str:
 # ----------------------------------------------------------------------
 # Example image name: ghcr.io/qualcomm-linux/pkg-builder:arm64-rawhide
 # The architecture part (amd64/arm64) is derived from the host.
-# The distro part can be any supported tag (rawhide, fedora44, centos8, rhel8, …)
+# The distro part can be any supported tag (rawhide, fedora44, centos8, rhel8, ...)
 DOCKER_IMAGE_NAME_FMT = "ghcr.io/qualcomm-linux/pkg-builder:{build_arch}-{suite_name}"
 
 def _discover_available_distros() -> list:
@@ -81,7 +81,7 @@ def _discover_available_distros() -> list:
                         for line in f:
                             line = line.strip().lower()
                             if line.startswith("from"):
-                                # Check for known RPM‑based base images
+                                # Check for known RPM-based base images
                                 if any(keyword in line for keyword in ("fedora", "centos", "redhat", "rhel")):
                                     distros.add(distro)
                                     break
@@ -158,7 +158,7 @@ def parse_arguments() -> argparse.Namespace:
     return args
 
 # ----------------------------------------------------------------------
-# Docker pre‑flight checks
+# Docker pre-flight checks
 # ----------------------------------------------------------------------
 def check_docker_dependencies(timeout: int = 20) -> bool:
     """

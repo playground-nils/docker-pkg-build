@@ -51,7 +51,7 @@ def _discover_available_distros() -> list:
                         for line in f:
                             line = line.strip().lower()
                             if line.startswith("from"):
-                                # Check for known debian‑based base images
+                                # Check for known debian-based base images
                                 if any(keyword in line for keyword in ("debian", "ubuntu")):
                                     distros.add(distro)
                                     break
