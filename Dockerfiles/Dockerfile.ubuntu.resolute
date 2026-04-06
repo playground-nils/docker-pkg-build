@@ -1,7 +1,8 @@
-# Debian sid (unstable) base image
-FROM debian:sid
+# Use an official Ubuntu base image
+FROM ubuntu:resolute
+LABEL org.opencontainers.image.source=https://github.com/qualcomm-linux/docker-pkg-build
 
-# Avoid interactive prompts during apt operations
+# Prevent interactive prompts during package installation
 ENV DEBIAN_FRONTEND=noninteractive
 
 COPY base-packages.txt /tmp/base-packages.txt
@@ -11,7 +12,7 @@ RUN apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-# sbuild on sid uses the "unshare" backend which requires:
+# sbuild on resolute uses the "unshare" backend which requires:
 #   uidmap      – newuidmap/newgidmap for user-namespace id mapping
 #   mmdebstrap  – used below to create the chroot tarball
 # Also provision subuid/subgid ranges for root so unshare can map ids.
@@ -26,12 +27,13 @@ RUN apt-get update && \
 
 COPY extra-packages.txt /tmp/extra-packages.txt
 COPY keyrings/ /tmp/keyrings/
-COPY sources/sid/qsc-deb-releases.sources /tmp/qsc-deb-releases.sources
+COPY sources/resolute/qsc-deb-releases.sources /tmp/qsc-deb-releases.sources
 
-# sbuild's unshare backend looks for a pre-built tarball at
-# /root/.cache/sbuild/<distro>-<arch>.tar — create it with mmdebstrap
-# so builds don't regenerate it every time, and include ca-certificates
-# so HTTPS extra-repositories work.
+# sbuild on resolute defaults to the "unshare" backend (not "schroot"), so it
+# ignores any schroot-style chroot in /srv/chroot/ and instead looks for a
+# pre-built tarball in /root/.cache/sbuild/<distro>-<arch>.tar.
+# We create that tarball directly with mmdebstrap, including ca-certificates
+# so that HTTPS extra-repositories (e.g. github.io PPAs) work during builds.
 # The customize-hook installs the Qualcomm APT signing key so that callers can
 # use signed-by=/etc/apt/keyrings/qsc-deb-releases.asc instead of trusted=yes.
 RUN EXTRA_PACKAGES=$(tr -s '[:space:]' ',' < /tmp/extra-packages.txt) && \
@@ -41,13 +43,13 @@ RUN EXTRA_PACKAGES=$(tr -s '[:space:]' ',' < /tmp/extra-packages.txt) && \
                --include="$EXTRA_PACKAGES" \
                --skip=output/mknod \
                --format=tar \
-               --components=main,contrib,non-free,non-free-firmware \
+               --components=main,universe \
                --customize-hook='mkdir -p "$1/etc/apt/keyrings" && cp /tmp/keyrings/qsc-deb-releases.asc "$1/etc/apt/keyrings/" && mkdir -p "$1/etc/apt/sources.list.d" && cp /tmp/qsc-deb-releases.sources "$1/etc/apt/sources.list.d/"' \
-               sid \
-               /root/.cache/sbuild/sid-arm64.tar
+               resolute \
+               /root/.cache/sbuild/resolute-arm64.tar
 
-# Workspace for mounting sources/outputs (your script already bind-mounts /workspace)
+# Set working directory
 WORKDIR /workspace
 
-# Default shell
-CMD ["bash"]
+# Default command
+CMD [ "bash" ]
