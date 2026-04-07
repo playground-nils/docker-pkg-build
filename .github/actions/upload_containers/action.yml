@@ -4,21 +4,8 @@ description: |
 
 inputs:
 
-  arch:
-    description: The architecture to build for. Ex amd64, arm64, etc
-    required: true
-
-  push-to-ghcr:
-    description: Whether to push the built image to GitHub Container Registry
-    required: true
-    default: "true"
-
-  token:
-    description: PAT token
-    required: true
-
-  username:
-    description: Username for the PAT token
+  family:
+    description: The distribution family to upload. Ex deb, rpm.
     required: true
 
 runs:
@@ -30,12 +17,10 @@ runs:
       if: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
       uses: docker/login-action@v3
 
-    - name: Push to GHCR
-      if: ${{ inputs.push-to-ghcr == 'true' }}
+    - name: Push Debian container images to GHCR
+      if: ${{ (github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'workflow_dispatch') && inputs.family == 'deb' }}
       shell: bash
       run: |
-        echo ${{inputs.token}} | docker login ghcr.io -u ${{inputs.username}} --password-stdin
-
         # UBUNTU IMAGES
         docker push ghcr.io/${{env.QCOM_ORG_NAME}}/${{env.IMAGE_NAME}}:noble
         docker push ghcr.io/${{env.QCOM_ORG_NAME}}/${{env.IMAGE_NAME}}:questing
@@ -45,7 +30,10 @@ runs:
         docker push ghcr.io/${{env.QCOM_ORG_NAME}}/${{env.IMAGE_NAME}}:trixie
         docker push ghcr.io/${{env.QCOM_ORG_NAME}}/${{env.IMAGE_NAME}}:sid
 
-        # TODO RPM IMAGES
+    - name: Push RPM container images to GHCR
+      if: ${{ (github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'workflow_dispatch') && inputs.family == 'rpm' }}
+      shell: bash
+      run: |
         for image in $(docker image ls | grep -oiE "ghcr.io/${{env.QCOM_ORG_NAME}}/${{env.IMAGE_NAME}}:(fedora|rhel|redhat|centos)\.[^\s]*"; do
           echo docker push ${image}
         done
