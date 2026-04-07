@@ -58,7 +58,7 @@ def _normalize_distro(distro: str) -> str:
 # Example image name: ghcr.io/qualcomm-linux/pkg-builder:arm64-rawhide
 # The architecture part (amd64/arm64) is derived from the host.
 # The distro part can be any supported tag (rawhide, fedora44, centos8, rhel8, ...)
-DOCKER_IMAGE_NAME_FMT = "ghcr.io/qualcomm-linux/pkg-builder:{build_arch}-{suite_name}"
+DOCKER_IMAGE_NAME_FMT = "ghcr.io/qualcomm-linux/pkg-builder:{suite_name}"
 
 def _discover_available_distros() -> list:
     """
@@ -226,15 +226,14 @@ def check_docker_dependencies(timeout: int = 20) -> bool:
 # ----------------------------------------------------------------------
 # Docker image build / rebuild helpers
 # ----------------------------------------------------------------------
-def build_docker_image(arch: str, distro: str) -> bool:
+def build_docker_image(distro: str) -> bool:
     """
-    Build a Docker image for the given architecture and distro.
+    Build a Docker image for the given distro.
     Looks for a Dockerfile named ``Dockerfile.{arch}.{distro}`` inside
     the ``Dockerfiles`` directory.
 
     Args:
-        arch (str): The architecture (e.g., 'amd64', 'arm64').
-        distro (str): The distribution (e.g., 'noble', 'questing').
+        distro (str): The distribution (e.g., 'fedora', 'centos').
 
     Returns:
         bool: True if the build succeeded, False otherwise.
@@ -244,19 +243,25 @@ def build_docker_image(arch: str, distro: str) -> bool:
     """
 
     this_script_dir = os.path.dirname(os.path.abspath(__file__))
-    docker_dir = os.path.normpath(os.path.join(this_script_dir, "Dockerfiles"))
-    dockerfile_name = f"Dockerfile.{arch}.{distro}"
+    docker_dir = os.path.normpath(os.path.join(this_script_dir, 'Dockerfiles'))
+    context_dir = docker_dir
+    # Find the Dockerfile matching the pattern Dockerfile.*.{distro}
+    pattern = f"Dockerfile.*.{distro}"
+    matches = glob.glob(os.path.join(docker_dir, pattern))
+    if not matches:
+        raise Exception(f"No Dockerfile found matching pattern: {pattern} in {docker_dir}")
+    dockerfile_name = os.path.basename(matches[0])
     dockerfile_path = os.path.join(docker_dir, dockerfile_name)
 
-    image_name = DOCKER_IMAGE_NAME_FMT.format(build_arch=arch, suite_name=distro)
+    image_name = DOCKER_IMAGE_NAME_FMT.format(suite_name=distro)
 
-    logger.debug(f"Building docker image '{image_name}' for arch '{arch}' from Dockerfile: {dockerfile_path}")
+    logger.debug(f"Building docker image '{image_name}' from Dockerfile: {dockerfile_path}")
 
     if not os.path.exists(dockerfile_path):
-        logger.error(f"No local Dockerfile found for arch '{arch}' at expected path: {dockerfile_path}. Cannot build image '{image_name}'.")
+        logger.error(f"No local Dockerfile found for distro '{distro}' at expected path: {dockerfile_path}. Cannot build image '{image_name}'.")
         return False
- 
-    build_cmd = ["docker", "build", "-t", image_name, "-f", dockerfile_path, docker_dir]
+
+    build_cmd = ["docker", "build", "-t", image_name, "-f", dockerfile_path, context_dir]
 
     logger.debug(f"Running: {' '.join(build_cmd)}")
 
@@ -285,9 +290,9 @@ def build_docker_image(arch: str, distro: str) -> bool:
         proc.kill()
         raise Exception(f"Timed out while building docker image from {dockerfile_path}.")
 
-def rebuild_docker_images(build_arch: str, distro: str = None) -> None:
+def rebuild_docker_images(distro: str = None) -> None:
     """
-    Force rebuild of the containers for the given architecture from Dockerfiles folder.
+    Force rebuild of the containers from Dockerfiles folder.
     If distro is specified, rebuild only that specific distro. Otherwise, rebuild all distros.
     """
 
@@ -295,20 +300,20 @@ def rebuild_docker_images(build_arch: str, distro: str = None) -> None:
 
     if distro:
         # Rebuild only the specified distro
-        dockerfiles = [os.path.join(docker_dir, f"Dockerfile.{build_arch}.{distro}")]
+        dockerfiles = [os.path.join(docker_dir, f'Dockerfile.*.{distro}')]
     else:
-        pattern = f"Dockerfile.{build_arch}.*"
+        pattern = f"Dockerfile.*.*"
         dockerfiles = sorted(glob.glob(os.path.join(docker_dir, pattern)))
 
     if not dockerfiles:
         raise Exception(
-            f"No Dockerfile(s) found for arch={arch} distro={distro or '*'}"
+            f"No Dockerfile(s) found for distro={distro or '*'}"
         )
 
     for dockerfile in dockerfiles:
         # suite_name needs to contain family and release, e.g. fedora.44, fedora.rawhide, etc.
         suite_name = '.'.join(os.path.basename(dockerfile).split('.')[-2:])
-        image_name = DOCKER_IMAGE_NAME_FMT.format(build_arch=build_arch, suite_name=suite_name)
+        image_name = DOCKER_IMAGE_NAME_FMT.format(suite_name=suite_name)
 
         logger.debug(f"Rebuilding Docker image '{image_name}' from {dockerfile}...")
 
@@ -319,7 +324,7 @@ def rebuild_docker_images(build_arch: str, distro: str = None) -> None:
         except subprocess.CalledProcessError:
             logger.debug(f"No existing image '{image_name}' to delete.")
 
-        build_docker_image(build_arch, suite_name)
+        build_docker_image(suite_name)
 
 
 # ----------------------------------------------------------------------
@@ -471,7 +476,7 @@ def main() -> None:
 
     # If --rebuild is specified, force rebuild of the docker images and exit
     if args.rebuild:
-        rebuild_docker_images(build_arch, args.distro)
+        rebuild_docker_images(args.distro)
         sys.exit(0)
 
     # Make sure source and output dirs are absolute paths
@@ -484,7 +489,7 @@ def main() -> None:
     logger.debug(f"The output dir is {args.output_dir}")
 
     # Determine image name
-    image_name = DOCKER_IMAGE_NAME_FMT.format(build_arch=build_arch, suite_name=args.distro)
+    image_name = DOCKER_IMAGE_NAME_FMT.format(suite_name=args.distro)
 
     # Ensure the Docker image exists locally
     image_exist = subprocess.run(["docker", "image", "inspect", image_name],
@@ -494,7 +499,7 @@ def main() -> None:
                                  timeout=10)
     if image_exist.returncode != 0:
         logger.warning(f"Docker image '{image_name}' is not present locally.")
-        build_docker_image(build_arch, args.distro)
+        build_docker_image(args.distro)
     else:
         logger.info(f"Docker image '{image_name}' is present locally.")
 
