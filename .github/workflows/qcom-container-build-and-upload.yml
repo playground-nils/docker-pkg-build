@@ -91,6 +91,6 @@ jobs:
         if: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
         shell: bash
         run: |
-         for image in $(docker image ls | grep -oiE "ghcr.io/${{env.QCOM_ORG_NAME}}/${{env.IMAGE_NAME}}:(fedora|rhel|redhat|centos)\.[^\s]*"; do
+         for image in $(docker image ls | grep -oiE "ghcr.io/${{env.QCOM_ORG_NAME}}/${{env.IMAGE_NAME}}:(fedora|rhel|redhat|centos)\.[^\s]*"); do
             docker push ${image}
           done
