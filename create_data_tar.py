@@ -25,12 +25,11 @@ import re
 import tarfile
 import subprocess
 import traceback
-import platform
 
 from color_logger import logger
 
 # Same image naming convention used by docker_deb_build.py
-DOCKER_IMAGE_NAME_FMT = "ghcr.io/qualcomm-linux/pkg-builder:{build_arch}-{suite_name}"
+DOCKER_IMAGE_NAME_FMT = "ghcr.io/qualcomm-linux/pkg-builder:{suite_name}"
 
 
 def parse_arguments():
@@ -66,7 +65,7 @@ def parse_arguments():
         required=False,
         default="",
         help="Docker image to use when running inside a container. "
-             "Defaults to ghcr.io/qualcomm-linux/pkg-builder:<host_arch>-<distro>."
+             "Defaults to ghcr.io/qualcomm-linux/pkg-builder:<distro>."
     )
     # Internal flag: set automatically when the script is already running inside
     # a container to prevent infinite re-invocation.
@@ -94,10 +93,8 @@ def rerun_in_docker(args, changes_path: str) -> int:
     if args.docker_image:
         image_name = args.docker_image
     else:
-        machine = platform.machine()
-        build_arch = "arm64" if machine == "aarch64" else ("amd64" if machine == "x86_64" else machine)
         suite = args.distro if args.distro else "noble"
-        image_name = DOCKER_IMAGE_NAME_FMT.format(build_arch=build_arch, suite_name=suite)
+        image_name = DOCKER_IMAGE_NAME_FMT.format(suite_name=suite)
 
     script_dir      = os.path.dirname(os.path.abspath(__file__))
     work_dir        = os.path.dirname(changes_path)
