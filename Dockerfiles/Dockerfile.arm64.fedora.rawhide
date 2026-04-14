@@ -1,0 +1,27 @@
+# Fedora Rawhide (unstable) base image for ARM64
+FROM fedora:rawhide
+
+# Avoid interactive prompts during dnf operations
+ENV DNF_YES=1
+
+# Install essential build tools and RPM utilities
+COPY base-packages.fedora.txt /tmp/base-packages.txt
+RUN sed -i 's/#.*$//' /tmp/base-packages.txt
+RUN if [[ -n $(</tmp/base-packages.txt) ]]; then dnf install -y $(</tmp/base-packages.txt) && \
+    dnf clean all && \
+    rm -rf /var/cache/dnf; \
+    else true; fi
+
+# Install any extra packages required for the build environment
+COPY extra-packages.fedora.txt /tmp/extra-packages.txt
+RUN sed -i 's/#.*$//' /tmp/extra-packages.txt
+RUN if [[ -n $(</tmp/extra-packages.txt) ]]; then dnf install -y $(</tmp/extra-packages.txt) && \
+    dnf clean all && \
+    rm -rf /var/cache/dnf; \
+    else true; fi
+
+# Workspace for mounting sources/outputs (your script already bind-mounts /workspace)
+WORKDIR /workspace
+
+# Default shell
+CMD ["bash"]

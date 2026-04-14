@@ -13,7 +13,6 @@ on:
       - main
     paths:
       - '.github/workflows/qcom-container-build-and-upload.yml'
-      - '.github/actions/build_container/action.yml'
       - 'Dockerfiles/**'
 
   push:
@@ -22,7 +21,6 @@ on:
       - develop
     paths:
       - '.github/workflows/qcom-container-build-and-upload.yml'
-      - '.github/actions/build_container/action.yml'
       - 'Dockerfiles/**'
 
   workflow_dispatch:
@@ -41,16 +39,14 @@ jobs:
   # Build the arm64 natively using a self-hosted runner on an arm64 host
   # Cross compiling the image using buildx on an x86_64 host was tried but failed due to
   # issues with qemu and multiarch support in docker buildx.
-  build-image-arm64:
+  build-deb-arm64:
     runs-on: ubuntu-24.04-arm
     steps:
-      
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Build Images
+      - name: Build Debian Images
         run: ./docker_deb_build.py --rebuild --no-update-check
-
 
       - name: Log in to GHCR
         if: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
@@ -60,7 +56,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload Images
+      - name: Upload Debian Images
         # Only upload on trusted events that land code on main
         if: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
         run: |
@@ -72,3 +68,29 @@ jobs:
           # DEBIAN IMAGES
           docker push ghcr.io/${{env.QCOM_ORG_NAME}}/${{env.IMAGE_NAME}}:trixie
           docker push ghcr.io/${{env.QCOM_ORG_NAME}}/${{env.IMAGE_NAME}}:sid
+
+  build-rpm-arm64:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build RPM Images
+        run: ./docker_rpm_build.py --rebuild --no-update-check
+
+      - name: Log in to GHCR
+        if: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload RPM Images
+        # Only upload on trusted events that land code on main
+        if: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+        shell: bash
+        run: |
+         for image in $(docker image ls | grep -oiE "ghcr.io/${{env.QCOM_ORG_NAME}}/${{env.IMAGE_NAME}}:(fedora|rhel|redhat|centos)\.[^\s]*"); do
+            docker push ${image}
+          done

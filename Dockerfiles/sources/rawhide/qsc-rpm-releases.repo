@@ -1,0 +1,5 @@
+[extra-repo]
+name=Extra Packages for Rawhide
+baseurl=https://qartifactory-edge.qualcomm.com/artifactory/qsc-rpm-releases/$basearch/
+enabled=1
+gpgcheck=0

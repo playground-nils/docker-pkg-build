@@ -5,9 +5,14 @@
 # SPDX-License-Identifier: BSD-3-Clause-Clear
 
 """
-docker_deb_build.py
+docker_rpm_build.py
 
-Helper script to build a debian package using the container from the Dockerfile in the docker/ folder.
+Helper script to build an RPM package inside a Fedora-based Docker container.
+Supports Fedora Rawhide (default) and can be extended to other Fedora,
+CentOS, or RHEL versions by providing the appropriate Docker image.
+The script mirrors the architectural choices of the original Debian-builder
+while replacing Debian-specific tooling (sbuild/gbp) with RPM-centric
+commands (rpmbuild, mock, dnf).
 """
 
 import os
@@ -17,7 +22,6 @@ import subprocess
 import traceback
 import platform
 import shutil
-import urllib.request
 import glob
 import grp
 import pwd
@@ -25,16 +29,45 @@ import getpass
 
 from color_logger import logger
 
-# Docker image name template
-# suite_name: 'noble', 'questing', 'sid'
-# Example: ghcr.io/qualcomm-linux/pkg-builder:noble
+def _normalize_distro(distro: str) -> str:
+    """
+    Normalize various distro input forms to the canonical form used in Dockerfile names.
+    Supports inputs like:
+        rawhide
+        fedora/rawhide, fedora-rawhide, fedora.rawhide
+        fedora44, fedora/44, fedora-44
+        centos8, centos/8, centos-8
+        rhel8, rhel/8, rhel-8
+    """
+    if not distro:
+        return distro
+
+    d = distro.lower()
+    # Replace separators with dot
+    d = d.replace("/", ".").replace("-", ".")
+    # Handle standalone "rawhide"
+    if d.startswith("rawhide"):
+        d = f"fedora.{d}"
+    # Handle cases where the base name is concatenated with the version (e.g., fedora44)
+    for base in ("fedora", "centos", "rhel"):
+        if d.startswith(base) and not d[len(base):].startswith("."):
+            suffix = d[len(base) :]
+            d = f"{base}.{suffix}"
+    return d
+
+# ----------------------------------------------------------------------
+# Docker image naming
+# ----------------------------------------------------------------------
+# Example image name: ghcr.io/qualcomm-linux/pkg-builder:arm64-rawhide
+# The architecture part (amd64/arm64) is derived from the host.
+# The distro part can be any supported tag (rawhide, fedora44, centos8, rhel8, ...)
 DOCKER_IMAGE_NAME_FMT = "ghcr.io/qualcomm-linux/pkg-builder:{suite_name}"
 
 def _discover_available_distros() -> list:
     """
-    Identify supported debian-based distros.
-    Search for Dockerfiles that derive from a debian or ubuntu
-    base image, and use their names to create the list of supported
+    Identify supported RPM-based distros.
+    Search for Dockerfiles that derive from a fedora, centos, redhat, or
+    rhel base image, and use their names to create the list of supported
     distributions for this build tool.
     """
     import re, os
@@ -51,8 +84,8 @@ def _discover_available_distros() -> list:
                         for line in f:
                             line = line.strip().lower()
                             if line.startswith("from"):
-                                # Check for known debian-based base images
-                                if any(keyword in line for keyword in ("debian", "ubuntu")):
+                                # Check for known RPM-based base images
+                                if any(keyword in line for keyword in ("fedora", "centos", "redhat", "rhel")):
                                     distros.add(distro)
                                     break
                 except Exception:
@@ -61,94 +94,78 @@ def _discover_available_distros() -> list:
     return sorted(distros)
 
 
+# ----------------------------------------------------------------------
+# Argument parsing
+# ----------------------------------------------------------------------
 def parse_arguments() -> argparse.Namespace:
     """
     Parse command line arguments for the script.
-
-    Returns:
-        argparse.Namespace: Parsed arguments.
     """
-    parser = argparse.ArgumentParser(description="Build a debian package inside a docker container.")
+    parser = argparse.ArgumentParser(description="Build an RPM package inside a docker container.")
 
     parser.add_argument("-n", "--no-update-check",
-                        default=False,
-                        required=False,
-                        action='store_true',
-                        help="Bypass the remote update check and allow running with an out-of-date repo.")
+        default=False,
+        required=False,
+        action='store_true',
+        help="Bypass the remote update check and allow running with an out-of-date repo.")
 
     parser.add_argument("-s", "--source-dir",
-                        required=False,
-                        default=None,
-                        help="Path to the source directory containing the debian package source.")
+        required=False,
+        default=None,
+        help="Path to the source directory containing the .spec file and sources.")
 
     parser.add_argument("-o", "--output-dir",
-                        required=False,
-                        default=None,
-                        help="Path to the output directory for the built package.")
+        required=False,
+        default=None,
+        help="Path to the output directory for the built RPMs.")
 
     parser.add_argument("-d", "--distro",
-                        type=str,
-                        choices=['noble', 'questing', 'resolute', 'trixie', 'sid'],
-                        default=None,
-                        help="The target distribution for the package build (or rebuild if --rebuild is used). If not specified with --rebuild, all distros will be rebuilt.")
-
-    parser.add_argument("-l", "--run-lintian",
-                        action='store_true',
-                        help="Run lintian on the package.")
+            type=str,
+            # choices are handled dynamically after normalization
+            default=None,
+            help="The target distribution for the package build. Defaults to Fedora Rawhide.")
 
     parser.add_argument("-e", "--extra-repo",
-                        type=str,
-                        action='append',
-                        default=[],
-                        help="Additional APT repository to include. Can be specified multiple times. Example: 'deb [arch=arm64 trusted=yes] http://pkg.qualcomm.com noble/stable main'")
-                        
+        type=str,
+        action='append',
+        default=[],
+        help="Additional YUM/DNF repository file to mount inside the container.")
+
     parser.add_argument("-p", "--extra-package",
-                        type=str,
-                        action='append',
-                        default=[],
-                        help="Additional .deb file or directory to install inside the build chroot. Can be specified multiple times.")
+        type=str,
+        action="append",
+        default=[],
+        help="Additional RPM file or directory to install inside the build chroot.")
 
     parser.add_argument("-r", "--rebuild",
-                        action='store_true',
-                        help="Force rebuild of the Docker image and exit.")
-
-    parser.add_argument("-k", "--skip-gbp",
-                        action='store_true',
-                        default=False,
-                        help="When building with Quilt format, skip GBP (Git Build Package) for the creation of the .orig tarball and manually handle the source package creation.")
+        action="store_true",
+        help="Force rebuild of the Docker image and exit.")
 
     args = parser.parse_args()
 
-    # Validate argument combinations
-    if args.rebuild:
-        # In rebuild mode, source-dir and output-dir should not be specified
-        if args.source_dir is not None:
-            raise Exception("--source-dir cannot be used with --rebuild mode")
-        if args.output_dir is not None:
-            raise Exception("--output-dir cannot be used with --rebuild mode")
-        if args.run_lintian:
-            raise Exception("--run-lintian cannot be used with --rebuild mode")
-        if args.extra_repo:
-            raise Exception("--extra-repo cannot be used with --rebuild mode")
-        if args.extra_package:
-            raise Exception("--extra-package cannot be used with --rebuild mode")
-        if args.skip_gbp:
-            raise Exception("--skip-gbp cannot be used with --rebuild mode")
+    # Normalize distro argument to match Dockerfile naming conventions
+    args.distro = _normalize_distro(args.distro)
+    # Validate that the normalized distro is supported
+    available_distros = _discover_available_distros()
+    if args.distro and args.distro not in available_distros:
+        # TODO I don't think throwing exceptions at the user is friendly
+        raise argparse.ArgumentTypeError(f"Unsupported distro: {args.distro} (supported: {available_distros})")
 
-    else:
-        # In build mode, apply defaults for source-dir, output-dir, and distro if not specified
+    # Apply sensible defaults when not rebuilding
+    if not args.rebuild:
         if args.source_dir is None:
             args.source_dir = "."
         if args.output_dir is None:
             args.output_dir = ".."
-        if args.distro is None:
-            raise Exception("--distro is required in build mode (when --rebuild is not used)")
 
     return args
 
+# ----------------------------------------------------------------------
+# Docker pre-flight checks
+# ----------------------------------------------------------------------
 def check_docker_dependencies(timeout: int = 20) -> bool:
     """
-    Verify docker CLI presence, daemon accessibility, and user permission to talk to the daemon.
+    Verify Docker CLI presence, daemon accessibility, and user permission.
     """
 
     # 1) docker binary present
@@ -161,7 +178,7 @@ def check_docker_dependencies(timeout: int = 20) -> bool:
                            check=True, timeout=timeout)
         logger.info("Docker CLI and daemon reachable.")
         return True
-        
+
     except subprocess.CalledProcessError as e:
         err = (e.stderr or b"").decode(errors="ignore") + (e.stdout or b"").decode(errors="ignore")
         err_l = err.lower()
@@ -209,12 +226,17 @@ def check_docker_dependencies(timeout: int = 20) -> bool:
     except subprocess.TimeoutExpired:
         raise Exception("Timed out while trying to contact the Docker daemon. Is it running?")
 
+# ----------------------------------------------------------------------
+# Docker image build / rebuild helpers
+# ----------------------------------------------------------------------
 def build_docker_image(distro: str) -> bool:
     """
-    Build a Docker image from the local Dockerfile.
+    Build a Docker image for the given distro.
+    Looks for a Dockerfile named ``Dockerfile.{arch}.{distro}`` inside
+    the ``Dockerfiles`` directory.
 
     Args:
-        distro (str): The distribution (e.g., 'noble', 'questing').
+        distro (str): The distribution (e.g., 'fedora', 'centos').
 
     Returns:
         bool: True if the build succeeded, False otherwise.
@@ -237,7 +259,7 @@ def build_docker_image(distro: str) -> bool:
     image_name = DOCKER_IMAGE_NAME_FMT.format(suite_name=distro)
 
     logger.debug(f"Building docker image '{image_name}' from Dockerfile: {dockerfile_path}")
-    
+
     if not os.path.exists(dockerfile_path):
         logger.error(f"No local Dockerfile found for distro '{distro}' at expected path: {dockerfile_path}. Cannot build image '{image_name}'.")
         return False
@@ -281,22 +303,24 @@ def rebuild_docker_images(distro: str = None) -> None:
 
     if distro:
         # Rebuild only the specified distro
-        dockerfile_glob = os.path.join(docker_dir, f'Dockerfile.*.{distro}')
-        dockerfiles = sorted(glob.glob(dockerfile_glob))
-        if not dockerfiles:
-            raise Exception(f"No Dockerfile found for distro={distro}")
-        logger.info(f"Rebuilding docker image for {distro}: {dockerfiles}")
+        dockerfiles = [os.path.join(docker_dir, f'Dockerfile.*.{distro}')]
     else:
-        # Rebuild all available debian-based distros
+        # Rebuild all available RPM-based distros
         dockerfiles = []
         for distro in _discover_available_distros():
-            dockerfile_glob = os.path.join(docker_dir, f'Dockerfile.*.*{distro}')
+            dockerfile_glob = os.path.join(docker_dir, f'Dockerfile.*.{distro}')
             dockerfiles.extend(glob.glob(dockerfile_glob))
         dockerfiles = sorted(dockerfiles)
         logger.info(f"Rebuilding all docker images: {dockerfiles}")
 
+    if not dockerfiles:
+        raise Exception(
+            f"No Dockerfile(s) found for distro={distro or '*'}"
+        )
+
     for dockerfile in dockerfiles:
-        suite_name = os.path.basename(dockerfile).split('.')[-1]
+        # suite_name needs to contain family and release, e.g. fedora.44, fedora.rawhide, etc.
+        suite_name = '.'.join(os.path.basename(dockerfile).split('.')[-2:])
         image_name = DOCKER_IMAGE_NAME_FMT.format(suite_name=suite_name)
 
         logger.debug(f"Rebuilding Docker image '{image_name}' from {dockerfile}...")
@@ -310,126 +334,23 @@ def rebuild_docker_images(distro: str = None) -> None:
 
         build_docker_image(suite_name)
 
-def is_git_repo(source_dir: str) -> bool:
+
+# ----------------------------------------------------------------------
+# Build RPM inside Docker
+# ----------------------------------------------------------------------
+def build_package_in_docker(image_name: str, source_dir: str, output_dir: str, extra_repo: list, extra_package: list) -> bool:
     """
-    Return True if the source directory is a git repository.
-    """
-    return os.path.exists(os.path.join(source_dir, '.git'))
+    Run ``rpmbuild`` inside the container and copy the resulting RPMs
+    to the host output directory.
 
-def make_source_pkg_cmd(sbuild_cmd: str) -> str:
-    """
-    Return a shell command (run inside the container, cwd=/workspace) that:
-
-      1. Reads the package name and version from debian/changelog.
-      2. Creates an upstream orig tarball from the source tree, excluding the
-         debian/ directory and the .git history (both are not part of upstream).
-      3. Runs dpkg-source -b to produce the .dsc + debian tarball.
-      4. Passes the resulting .dsc to sbuild for the actual binary build.
-
-    All intermediate files (orig tarball, .dsc, debian.tar.*) are written to
-    /workspace (the parent of /workspace/src) so they don't pollute the source
-    tree and are accessible to sbuild.
-
-    This path is taken for 3.0 (quilt) packages that are NOT managed by gbp
-    (i.e. no debian/gbp.conf).  gbp is still used for proper gbp projects.
-    """
-    return (
-        "set -e; "
-        "cd /workspace; "
-        # Read package metadata from debian/changelog
-        "PKG=$(dpkg-parsechangelog -l /workspace/src/debian/changelog -S Source); "
-        "VER=$(dpkg-parsechangelog -l /workspace/src/debian/changelog -S Version); "
-        # Strip the debian revision (everything after the last '-') to get the upstream version.
-        # e.g. '1-1' -> '1',  '6.12.0-1' -> '6.12.0'
-        "UPSTREAM_VER=$(echo \"$VER\" | sed 's/-[^-]*$//'); "
-        "ORIG_TAR=\"${PKG}_${UPSTREAM_VER}.orig.tar.gz\"; "
-        "echo \"[source-pkg] Package : $PKG  Version: $VER  Upstream: $UPSTREAM_VER\"; "
-        # Create the orig tarball — exclude debian/ (packaging overlay) and .git/
-        # (version-control history is not part of the upstream source).
-        "echo \"[source-pkg] Creating orig tarball: $ORIG_TAR (may take a while for large trees)\"; "
-        "tar czf \"$ORIG_TAR\" --exclude=./debian --exclude=./.git -C /workspace/src .; "
-        # Build the source package (.dsc + debian.tar.*)
-        "echo \"[source-pkg] Running dpkg-source -b ...\"; "
-        "dpkg-source -b /workspace/src; "
-        # Locate the generated .dsc
-        "DSC_FILE=$(ls /workspace/${PKG}_${VER}.dsc 2>/dev/null | head -1); "
-        "[ -n \"$DSC_FILE\" ] || { echo \"ERROR: .dsc not found after dpkg-source -b\"; exit 1; }; "
-        "echo \"[source-pkg] Source package ready: $DSC_FILE\"; "
-        # Hand off to sbuild
-        f"{sbuild_cmd} \"$DSC_FILE\""
-    )
-
-
-def build_package_in_docker(image_name: str, source_dir: str, output_dir: str, distro: str, run_lintian: bool, extra_repo: str, extra_package: str, skip_gbp: bool) -> bool:
-    """
-    Build the debian package inside the given docker image.
-    source_dir: path to the debian package source (mounted into the container)
-    output_dir: path to the output directory for the built package (mounted into the container)
-    distro: target distribution string (e.g. 'noble')
-    run_lintian: whether to run lintian on the built package
-    extra_repo: list of additional APT repositories to include
     Returns True on success, False on failure.
     """
+    # The container is expected to have rpmbuild installed and a
+    # ``~/rpmbuild`` tree. The command builds all .spec files and
+    # copies the resulting RPMs back to the host.
+    build_cmd = "rpmbuild -ba *.spec && cp -a ~/rpmbuild/RPMS/* /workspace/output/",
 
-    # Register the name of the newest build log in the output_dir in case there are leftovers from a previous build
-    # So that we can identify if this run produced a newer build log. Sbuild produces .build files with timestamps,
-    # and one of them is a symlink to the latest build log.
-    build_log_files = glob.glob(os.path.join(output_dir or '.', '*.build'))
-    prev_build_log = next((os.readlink(p) for p in build_log_files if os.path.islink(p)), None)
-    logger.debug(f"Previous build log: {prev_build_log}")
-
-    # Build the gbp command
-    # The --git-builder value is a single string passed to gbp
-    extra_repo_option = " ".join(f"--extra-repository='{repo}'" for repo in extra_repo) if extra_repo else ""
-    extra_package_option = " ".join(f"--extra-package='{pkg}'" for pkg in extra_package) if extra_package else ""
-    lintian_option = '--no-run-lintian' if not run_lintian else ""
-    # --no-clean-source: skip dpkg-buildpackage --clean on host (avoids build-dep check outside chroot)
-    sbuild_cmd = f"sbuild --no-clean-source --build-dir=/workspace/output --host=arm64 --build=arm64 --dist={distro} {lintian_option} {extra_repo_option} {extra_package_option}"
-
-    # Ensure git inside the container treats the mounted checkout as safe
-    git_safe_cmd = "git config --global --add safe.directory /workspace/src"
-    gbp_cmd = f"{git_safe_cmd} && gbp buildpackage --git-no-pristine-tar --git-ignore-branch --git-builder=\"{sbuild_cmd}\""
-
-    # Decide which build command to run based on debian/source/format in the source tree.
-    # Prefer 'native' -> run sbuild directly. If the source format uses 'quilt', use gbp.
-    format_file = os.path.join(source_dir, 'debian', 'source', 'format')
-    if not os.path.exists(format_file):
-        raise Exception(f"Missing {format_file}: cannot determine source format (native/quilt). Is the source dir correctly pointing to a debian package source tree?")
-
-    try:
-        with open(format_file, 'r', errors='ignore') as f:
-            fmt = f.read().lower()
-    except Exception as e:
-        raise Exception(f"Failed to read {format_file}: {e}")
-
-    if 'native' in fmt:
-        # Native package: run sbuild directly in the source directory.
-        build_cmd = sbuild_cmd
-        logger.debug("Source format: native — using sbuild directly")
-    elif 'quilt' in fmt:
-        if not is_git_repo(source_dir):
-            logger.warning(f"Source format is quilt but {source_dir} is not a git repository. This typically means the source tree was copied without the .git history, which is required for quilt format.")
-            logger.warning(f"The .dsc generation will be performed manually via dpkg-source, but this may lead to issues with the build if the debian/patches/ directory relies on git history (e.g. for patch naming or series generation). Consider using a git repository with gbp for better support of quilt format.")
-            build_cmd = make_source_pkg_cmd(sbuild_cmd)
-
-        else: # git repository present
-            if skip_gbp:
-                # Non-gbp quilt project (e.g. kernel injected with a debian/ overlay):
-                # generate the orig tarball and .dsc via dpkg-source, then pass the
-                # .dsc to sbuild so it can build the quilt package correctly.
-                build_cmd = make_source_pkg_cmd(sbuild_cmd)
-                logger.warning("Skipping gbp buildpackage for quilt source format as per --skip-gbp. Manually generating source package with dpkg-source may lead to issues if the debian/patches/ directory relies on git history. Consider using gbp for better support of quilt format.")
-
-            else:
-                # gbp-managed quilt project: use gbp buildpackage to create the orig
-                # tarball from git history and drive sbuild.
-                build_cmd = gbp_cmd
-                logger.debug("Source format: quilt + gbp.conf — using gbp buildpackage")
-
-    else:
-        raise Exception(f"Unsupported debian/source/format in {format_file}. Expected to contain 'native' or 'quilt', got: {fmt!r}")
-
-    # Prepare volume mounts for extra packages (files or directories)
+    # Prepare mounts for extra RPMs
     extra_mounts = []
     for pkg_path in extra_package:
         abs_path = os.path.abspath(pkg_path)
@@ -439,12 +360,24 @@ def build_package_in_docker(image_name: str, source_dir: str, output_dir: str, d
         # Mount at the same absolute path inside the container
         extra_mounts.extend(['-v', f"{abs_path}:{abs_path}:Z"])
 
+    # Prepare mounts for extra repo files (e.g., .repo)
+    extra_repo_mounts = []
+    for repo_path in extra_repo:
+        abs_path = os.path.abspath(repo_path)
+        if not os.path.exists(abs_path):
+            logger.warning(f"Extra repo path does not exist and will be ignored: {repo_path}")
+            continue
+        # Mount at the same absolute path inside the container
+        extra_repo_mounts.extend(["-v", f"{abs_path}:{abs_path}:Z"])
+
     docker_cmd = [
         'docker', 'run', '--rm', '--privileged', "-t",
         '-v', f"{source_dir}:/workspace/src:Z",
         '-v', f"{output_dir}:/workspace/output:Z",
         # Insert any extra package mounts
         *extra_mounts,
+        # TODO make sure we're handling extra repos properly
+        *extra_repo_mounts,
         '-w', '/workspace/src',
         image_name, 'bash', '-c', build_cmd
     ]
@@ -458,21 +391,17 @@ def build_package_in_docker(image_name: str, source_dir: str, output_dir: str, d
         raise
 
     if res.returncode == 0:
-        logger.info("✅ Successfully built package")
+        logger.info("✅ RPM package built successfully.")
     else:
-        logger.error("❌ Build failed")
+        logger.error("❌ RPM build failed.")
 
-
-    build_log_files = glob.glob(os.path.join(output_dir or '.', '*.build'))
-    new_build_log = next((os.readlink(p) for p in build_log_files if os.path.islink(p)), None)
-
-    if new_build_log == prev_build_log:
-        logger.debug("ℹ️ No new sbuild log produced during this run.")
-    else:
-        logger.debug(f"ℹ️ New sbuild log available at: {os.path.join(output_dir, new_build_log)}")
+    # TODO are there any logs we can/should gather here?
 
     return res.returncode == 0
 
+# ----------------------------------------------------------------------
+# Repository up-to-date check
+# ----------------------------------------------------------------------
 def check_if_repo_up_to_date() -> None:
     """
     Check if the local docker_deb_build repository is up to date with the remote.
@@ -501,7 +430,7 @@ def check_if_repo_up_to_date() -> None:
 
     if local_head != remote_head:
         logger.critical("!"*80)
-        logger.critical("Your local docker_deb_build repo is NOT UP TO DATE with the remote!")
+        logger.critical("Local repository is NOT up-to-date with the remote!")
         logger.critical(f"  Local HEAD : {local_head}")
         logger.critical(f"  Remote HEAD: {remote_head}")
         logger.critical(f"Please pull the latest changes from {REMOTE}.")
@@ -513,7 +442,9 @@ def check_if_repo_up_to_date() -> None:
     else:
         logger.info("The docker-pkg-build repo is up to date with the remote.")
 
-
+# ----------------------------------------------------------------------
+# Main entry point
+# ----------------------------------------------------------------------
 def main() -> None:
     """
     Main entry point of the script.
@@ -532,10 +463,21 @@ def main() -> None:
     if not args.no_update_check:
         check_if_repo_up_to_date()
 
-    # Only ARM64 hosts are supported.
-    if platform.machine() != "aarch64":
-        raise Exception(f"Unsupported host architecture: {platform.machine()}. Only ARM64 (aarch64) hosts are supported.")
-    logger.debug("Host architecture: arm64")
+    # TODO rpmbuild isn't sbuild. What do we actually need to do here to handle arch?
+    # Determine host architecture
+    host_arch = platform.machine()
+    if host_arch == "x86_64":
+        build_arch = "amd64"
+        logger.debug("Host architecture x86_64 mapped to amd64.")
+        # TODO check whether we support cross-compilation for RPM builds
+        # raise Exception(
+        #     "AMD64 host is not supported for these builds; run on an ARM64 host."
+        # )
+    elif host_arch == "aarch64":
+        build_arch = "arm64"
+        logger.debug("Host architecture aarch64 mapped to arm64.")
+    else:
+        raise Exception(f"Unsupported host architecture: {host_arch}")
 
     # Verify Docker is available and the current user can talk to the daemon
     check_docker_dependencies()
@@ -554,8 +496,10 @@ def main() -> None:
     logger.debug(f"The source dir is {args.source_dir}")
     logger.debug(f"The output dir is {args.output_dir}")
 
+    # Determine image name
     image_name = DOCKER_IMAGE_NAME_FMT.format(suite_name=args.distro)
 
+    # Ensure the Docker image exists locally
     image_exist = subprocess.run(["docker", "image", "inspect", image_name],
                                  stdout=subprocess.DEVNULL,
                                  stderr=subprocess.DEVNULL,
@@ -567,7 +511,8 @@ def main() -> None:
     else:
         logger.info(f"Docker image '{image_name}' is present locally.")
 
-    ret = build_package_in_docker(image_name, args.source_dir, args.output_dir, args.distro, args.run_lintian, args.extra_repo, args.extra_package, args.skip_gbp)
+    # Run the build inside Docker
+    ret = build_package_in_docker(image_name, args.source_dir, args.output_dir, args.extra_repo, args.extra_package)
 
     if ret:
         sys.exit(0)
