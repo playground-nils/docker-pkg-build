@@ -39,6 +39,9 @@ def _normalize_distro(distro: str) -> str:
         centos8, centos/8, centos-8
         rhel8, rhel/8, rhel-8
     """
+    if not distro:
+        return distro
+
     d = distro.lower()
     # Replace separators with dot
     d = d.replace("/", ".").replace("-", ".")
@@ -119,7 +122,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("-d", "--distro",
             type=str,
             # choices are handled dynamically after normalization
-            default="rawhide",
+            default=None,
             help="The target distribution for the package build. Defaults to Fedora Rawhide.")
 
     parser.add_argument("-e", "--extra-repo",
@@ -144,7 +147,7 @@ def parse_arguments() -> argparse.Namespace:
     args.distro = _normalize_distro(args.distro)
     # Validate that the normalized distro is supported
     available_distros = _discover_available_distros()
-    if args.distro not in available_distros:
+    if args.distro and args.distro not in available_distros:
         # TODO I don't think throwing exceptions at the user is friendly
         raise argparse.ArgumentTypeError(f"Unsupported distro: {args.distro} (supported: {available_distros})")
 
@@ -302,8 +305,13 @@ def rebuild_docker_images(distro: str = None) -> None:
         # Rebuild only the specified distro
         dockerfiles = [os.path.join(docker_dir, f'Dockerfile.*.{distro}')]
     else:
-        pattern = f"Dockerfile.*.*"
-        dockerfiles = sorted(glob.glob(os.path.join(docker_dir, pattern)))
+        # Rebuild all available RPM-based distros
+        dockerfiles = []
+        for distro in _discover_available_distros():
+            dockerfile_glob = os.path.join(docker_dir, f'Dockerfile.*.{distro}')
+            dockerfiles.extend(glob.glob(dockerfile_glob))
+        dockerfiles = sorted(dockerfiles)
+        logger.info(f"Rebuilding all docker images: {dockerfiles}")
 
     if not dockerfiles:
         raise Exception(
