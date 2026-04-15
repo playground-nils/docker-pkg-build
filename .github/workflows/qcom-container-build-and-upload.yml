@@ -86,11 +86,19 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Show matching images
+        shell: bash
+        run: |
+          docker image ls --format '{{.Repository}}:{{.Tag}}' \
+            | grep -E "^ghcr.io/${{ env.QCOM_ORG_NAME }}/${{ env.IMAGE_NAME }}:(fedora|rhel|redhat|centos)\..*$" || true
+
       - name: Upload RPM Images
-        # Only upload on trusted events that land code on main
         if: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
         shell: bash
         run: |
-         for image in $(docker image ls | grep -oiE "ghcr.io/${{env.QCOM_ORG_NAME}}/${{env.IMAGE_NAME}}:(fedora|rhel|redhat|centos)\.[^\s]*"); do
-            docker push ${image}
-          done
+          docker image ls --format '{{.Repository}}:{{.Tag}}' \
+            | grep -E "^ghcr.io/${{ env.QCOM_ORG_NAME }}/${{ env.IMAGE_NAME }}:(fedora|rhel|redhat|centos)\..*$" \
+            | while read -r image; do
+                echo "Pushing $image"
+                docker push "$image"
+              done
