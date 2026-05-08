@@ -13,7 +13,7 @@ docker_deb_build.py        # Main entry-point script (the "one-liner" wrapper)
 create_data_tar.py         # Helper used internally
 color_logger.py            # Logging utilities
 Dockerfiles/
-  Dockerfile.arm64.<os>.<distro>   # One Dockerfile per target distro
+  Dockerfile.<os>.<distro>         # One Dockerfile per target distro
   base-packages.txt                # Packages installed in the Docker image layer
   extra-packages.txt               # Packages installed inside the build chroot
   keyrings/
