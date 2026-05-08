@@ -36,7 +36,9 @@ Dockerfiles/
 
 - **schroot vs. unshare**: Newer sbuild versions (resolute, sid) default to the unshare backend,
   which expects a tarball at `/root/.cache/sbuild/<distro>-<arch>.tar`, not a `/srv/chroot/`
-  directory. Dockerfiles must use `mmdebstrap --format=tar` for these distros.
+  directory. Dockerfiles must use `mmdebstrap --format=tar` for these distros, and must disable
+  sbuild's unshare auto-regeneration/max-age refresh so the customized tarball is not replaced
+  with a plain one that lacks Qualcomm APT sources.
 - **CA certificates in chroot**: The chroot tarball must include `ca-certificates` and `openssl`
   so that HTTPS APT repositories work inside the chroot at build time.
 - **Qualcomm APT key**: All chroots have the Qualcomm PGP key pre-installed at

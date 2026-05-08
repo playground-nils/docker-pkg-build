@@ -47,6 +47,16 @@ RUN EXTRA_PACKAGES=$(tr -s '[:space:]' ',' < /tmp/extra-packages.txt) && \
                sid \
                /root/.cache/sbuild/sid-arm64.tar
 
+# Keep using the customized tarball baked into the image. If sbuild auto-creates
+# a fresh tarball after its default max-age, it omits the Qualcomm repo config
+# and sid builds lose qcom-* dependencies from qartifactory.
+RUN mkdir -p /root/.config/sbuild && \
+    printf '%s\n' \
+      '$unshare_mmdebstrap_keep_tarball = 1;' \
+      '$unshare_mmdebstrap_max_age = -1;' \
+      '$unshare_mmdebstrap_auto_create = 0;' \
+      > /root/.config/sbuild/config.pl
+
 # Workspace for mounting sources/outputs (your script already bind-mounts /workspace)
 WORKDIR /workspace
 

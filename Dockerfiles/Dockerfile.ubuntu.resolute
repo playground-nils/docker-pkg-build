@@ -48,6 +48,16 @@ RUN EXTRA_PACKAGES=$(tr -s '[:space:]' ',' < /tmp/extra-packages.txt) && \
                resolute \
                /root/.cache/sbuild/resolute-arm64.tar
 
+# Keep using the customized tarball baked into the image. If sbuild auto-creates
+# a fresh tarball after its default max-age, it omits the Qualcomm repo config
+# and resolute builds lose qcom-* dependencies from qartifactory.
+RUN mkdir -p /root/.config/sbuild && \
+    printf '%s\n' \
+      '$unshare_mmdebstrap_keep_tarball = 1;' \
+      '$unshare_mmdebstrap_max_age = -1;' \
+      '$unshare_mmdebstrap_auto_create = 0;' \
+      > /root/.config/sbuild/config.pl
+
 # Set working directory
 WORKDIR /workspace
 
