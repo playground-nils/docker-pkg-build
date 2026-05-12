@@ -16,3 +16,4 @@ python3
 python3-pip
 qt-devel
 rpm-build
+rpmdevtools
