@@ -1,104 +1,94 @@
 name: Container Build And Upload
-description: |
-  Builds and uploads to GHCR (GitHub Container Registry) the container used to build the Qualcomm debian packages.
-  Builds natively on an arm64 self-hosted runner. Images are uploaded on push to main, scheduled runs, and manual dispatches.
+description: 'Builds and uploads to GHCR (GitHub Container Registry) the container
+  used to build the Qualcomm debian packages.
 
-on:
+  Builds natively on an arm64 self-hosted runner. Images are uploaded on push to main,
+  scheduled runs, and manual dispatches.
+
+  '
+'on':
   schedule:
-    # Runs at 00:00 UTC every Monday
-    - cron: '0 0 * * 1'
-
+  - cron: 0 0 * * 1
   pull_request:
     branches:
-      - main
+    - main
     paths:
-      - '.github/workflows/qcom-container-build-and-upload.yml'
-      - 'Dockerfiles/**'
-
+    - .github/workflows/qcom-container-build-and-upload.yml
+    - Dockerfiles/**
   push:
     branches:
-      - main
-      - develop
+    - main
+    - develop
     paths:
-      - '.github/workflows/qcom-container-build-and-upload.yml'
-      - 'Dockerfiles/**'
-
-  workflow_dispatch:
-
+    - .github/workflows/qcom-container-build-and-upload.yml
+    - Dockerfiles/**
+  workflow_dispatch: null
 permissions:
   contents: read
   packages: write
-
 env:
-  QCOM_ORG_NAME: "qualcomm-linux"
-
-  IMAGE_NAME: "pkg-builder"
-
+  QCOM_ORG_NAME: qualcomm-linux
+  IMAGE_NAME: pkg-builder
 jobs:
-
-  # Build the arm64 natively using a self-hosted runner on an arm64 host
-  # Cross compiling the image using buildx on an x86_64 host was tried but failed due to
-  # issues with qemu and multiarch support in docker buildx.
   build-deb-arm64:
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    - name: Build Debian Images
+      run: ./docker_deb_build.py --rebuild --no-update-check
+    - name: Log in to GHCR
+      if: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name
+        == 'workflow_dispatch' }}
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    - name: Upload Debian Images
+      if: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name
+        == 'workflow_dispatch' }}
+      run: '# UBUNTU IMAGES
 
-      - name: Build Debian Images
-        run: ./docker_deb_build.py --rebuild --no-update-check
+        docker push ghcr.io/${{env.QCOM_ORG_NAME}}/${{env.IMAGE_NAME}}:noble
 
-      - name: Log in to GHCR
-        if: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+        docker push ghcr.io/${{env.QCOM_ORG_NAME}}/${{env.IMAGE_NAME}}:questing
 
-      - name: Upload Debian Images
-        # Only upload on trusted events that land code on main
-        if: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
-        run: |
-          # UBUNTU IMAGES
-          docker push ghcr.io/${{env.QCOM_ORG_NAME}}/${{env.IMAGE_NAME}}:noble
-          docker push ghcr.io/${{env.QCOM_ORG_NAME}}/${{env.IMAGE_NAME}}:questing
-          docker push ghcr.io/${{env.QCOM_ORG_NAME}}/${{env.IMAGE_NAME}}:resolute
+        docker push ghcr.io/${{env.QCOM_ORG_NAME}}/${{env.IMAGE_NAME}}:resolute
 
-          # DEBIAN IMAGES
-          docker push ghcr.io/${{env.QCOM_ORG_NAME}}/${{env.IMAGE_NAME}}:trixie
-          docker push ghcr.io/${{env.QCOM_ORG_NAME}}/${{env.IMAGE_NAME}}:sid
 
+        # DEBIAN IMAGES
+
+        docker push ghcr.io/${{env.QCOM_ORG_NAME}}/${{env.IMAGE_NAME}}:trixie
+
+        docker push ghcr.io/${{env.QCOM_ORG_NAME}}/${{env.IMAGE_NAME}}:sid
+
+        '
   build-rpm-arm64:
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Build RPM Images
-        run: ./docker_rpm_build.py --rebuild --no-update-check
-
-      - name: Log in to GHCR
-        if: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Show matching images
-        shell: bash
-        run: |
-          docker image ls --format '{{.Repository}}:{{.Tag}}' \
-            | grep -E "^ghcr.io/${{ env.QCOM_ORG_NAME }}/${{ env.IMAGE_NAME }}:(fedora|rhel|redhat|centos)\..*$" || true
-
-      - name: Upload RPM Images
-        if: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
-        shell: bash
-        run: |
-          docker image ls --format '{{.Repository}}:{{.Tag}}' \
-            | grep -E "^ghcr.io/${{ env.QCOM_ORG_NAME }}/${{ env.IMAGE_NAME }}:(fedora|rhel|redhat|centos)\..*$" \
-            | while read -r image; do
-                echo "Pushing $image"
-                docker push "$image"
-              done
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    - name: Build RPM Images
+      run: ./docker_rpm_build.py --rebuild --no-update-check
+    - name: Log in to GHCR
+      if: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name
+        == 'workflow_dispatch' }}
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    - name: Show matching images
+      shell: bash
+      run: "docker image ls --format '{{.Repository}}:{{.Tag}}' \\\n  | grep -E \"\
+        ^ghcr.io/${{ env.QCOM_ORG_NAME }}/${{ env.IMAGE_NAME }}:(fedora|rhel|redhat|centos)\\\
+        ..*$\" || true\n"
+    - name: Upload RPM Images
+      if: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name
+        == 'workflow_dispatch' }}
+      shell: bash
+      run: "docker image ls --format '{{.Repository}}:{{.Tag}}' \\\n  | grep -E \"\
+        ^ghcr.io/${{ env.QCOM_ORG_NAME }}/${{ env.IMAGE_NAME }}:(fedora|rhel|redhat|centos)\\\
+        ..*$\" \\\n  | while read -r image; do\n      echo \"Pushing $image\"\n  \
+        \    docker push \"$image\"\n    done\n"
